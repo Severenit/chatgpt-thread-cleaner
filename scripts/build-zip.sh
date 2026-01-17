@@ -11,6 +11,8 @@ rm -f "$OUT"
 # Собираем архив для Chrome Web Store из текущей папки.
 # Исключаем мусор и сам архив.
 zip -r "$OUT" . \
+  -x ".git/*" \
+  -x ".git/**" \
   -x "*.DS_Store" \
   -x "__MACOSX/*" \
   -x "$OUT" \
