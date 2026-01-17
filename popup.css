@@ -1,0 +1,60 @@
+:root {
+  color-scheme: light dark;
+  --chatgpt-font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  --chatgpt-font-size: 13px;
+  --chatgpt-line-height: 1.4;
+  --chatgpt-font-feature-settings: normal;
+  --chatgpt-font-variation-settings: normal;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: var(--chatgpt-font-family);
+  font-size: var(--chatgpt-font-size);
+  line-height: var(--chatgpt-line-height);
+  font-feature-settings: var(--chatgpt-font-feature-settings);
+  font-variation-settings: var(--chatgpt-font-variation-settings);
+}
+
+.wrap {
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid color-mix(in oklab, CanvasText 22%, Canvas 78%);
+  background: color-mix(in oklab, CanvasText 6%, Canvas 94%);
+  color: CanvasText;
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.status {
+  margin: 0;
+  min-height: 18px;
+  color: color-mix(in oklab, CanvasText 80%, Canvas 20%);
+}
+
+.hint {
+  margin: 0;
+  color: color-mix(in oklab, CanvasText 55%, Canvas 45%);
+  font-size: 12px;
+}
+

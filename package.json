@@ -1,0 +1,10 @@
+{
+  "name": "chatgpt-thread-cleaner",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Chrome MV3 extension: reduces ChatGPT thread DOM by removing old message nodes.",
+  "scripts": {
+    "build:zip": "bash scripts/build-zip.sh"
+  }
+}
+
