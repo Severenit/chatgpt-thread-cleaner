@@ -1,7 +1,6 @@
 (() => {
   const KEEP_LAST = 3;
   const BTN_ATTR = "data-chatgpt-dom-cleaner-btn";
-  const MENU_ATTR = "data-chatgpt-dom-cleaner-menuitem";
   const ICON_HREF = "/cdn/assets/sprites-core-k5zux585.svg#a5ec30";
   const BUTTON_TEXT = "Разгрузить чат";
   const MENU_TEXT = "Разгрузить чат (оставить 3)";
@@ -9,6 +8,18 @@
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
 
+  /**
+   * Возвращает список DOM-узлов сообщений текущего диалога.
+   *
+   * Сначала пробует более стабильный селектор ChatGPT:
+   * `article[data-testid^="conversation-turn"]`.
+   * Если разметка изменилась — fallback на `article`.
+   *
+   * Важно: поиск ограничен `main`, чтобы случайно не затронуть `article`
+   * вне области диалога.
+   *
+   * @returns {HTMLElement[]} Список `article` (по DOM-порядку).
+   */
   function getChatArticles() {
     const root = document.querySelector("main") ?? document.body;
     const primary = Array.from(
@@ -17,6 +28,12 @@
     return primary.length ? primary : Array.from(root.querySelectorAll("article"));
   }
 
+  /**
+   * Чистит DOM: удаляет старые сообщения, оставляя последние `keepLast`.
+   *
+   * @param {number} keepLast - Сколько последних сообщений оставить.
+   * @returns {{total:number, removed:number, kept:number}} Счётчики до/после.
+   */
   function cleanChatDom(keepLast) {
     const keep = Math.max(0, Math.floor(Number(keepLast)));
     const nodes = getChatArticles();
@@ -29,11 +46,22 @@
     return { total, removed: toRemove.length, kept: keep };
   }
 
+  /**
+   * Запускает очистку и показывает toast с результатом.
+   *
+   * Сайд-эффект: удаляет DOM-узлы сообщений.
+   */
   function runAndToast() {
     const { total, removed, kept } = cleanChatDom(KEEP_LAST);
     toast(`Разгрузка чата: удалено ${removed} из ${total}, оставлено ${kept}`);
   }
 
+  /**
+   * Показывает “модалку-тост” в правом нижнем углу.
+   * Повторный вызов заменяет предыдущий toast (чтобы не спамить).
+   *
+   * @param {string} text - Текст сообщения.
+   */
   function toast(text) {
     const prev = document.getElementById(TOAST_ID);
     if (prev) prev.remove();
@@ -71,6 +99,12 @@
     }, TOAST_MS);
   }
 
+  /**
+   * Встраивает кнопку “Разгрузить чат” в хедер ChatGPT (рядом с “Поделиться”),
+   * либо обновляет видимость уже существующей.
+   *
+   * Кнопка показывается только если сообщений > KEEP_LAST.
+   */
   function ensureHeaderButton() {
     const header =
       document.querySelector("header") ??
@@ -110,6 +144,11 @@
     updateHeaderButtonVisibility(btn);
   }
 
+  /**
+   * Скрывает кнопку на новом/коротком диалоге (когда чистить нечего).
+   *
+   * @param {HTMLElement} btn - Кнопка, которую нужно показать/скрыть.
+   */
   function updateHeaderButtonVisibility(btn) {
     // В новом чате/когда сообщений мало — кнопка не нужна.
     const total = getChatArticles().length;
@@ -117,6 +156,13 @@
     btn.style.display = shouldShow ? "" : "none";
   }
 
+  /**
+   * Ищет кнопку “Поделиться/Share” в переданном scope.
+   * Используется как “якорь” для вставки нашей кнопки.
+   *
+   * @param {ParentNode} scope - Контейнер, где ищем кнопку.
+   * @returns {HTMLButtonElement|null} Кнопка Share, если найдена.
+   */
   function findShareButton(scope) {
     const candidates = Array.from(scope.querySelectorAll("button"));
     for (const b of candidates) {
@@ -128,6 +174,13 @@
     return null;
   }
 
+  /**
+   * Делает кнопку, максимально похожую на “Поделиться”: клонирует DOM,
+   * подменяет иконку и текст, убирает специфичные атрибуты.
+   *
+   * @param {HTMLButtonElement} shareBtn - Оригинальная кнопка Share.
+   * @returns {HTMLButtonElement} Новая кнопка “Разгрузить чат”.
+   */
   function cloneShareButtonAsCleaner(shareBtn) {
     const btn = shareBtn.cloneNode(true);
 
@@ -164,6 +217,12 @@
     return btn;
   }
 
+  /**
+   * Fallback-кнопка, если не удалось найти/клонировать Share.
+   * Даёт базовую функциональность без зависимости от классов ChatGPT UI.
+   *
+   * @returns {HTMLButtonElement} Кнопка “Разгрузить чат (оставить 3)”.
+   */
   function createFallbackCleanerButton() {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -182,52 +241,12 @@
     return btn;
   }
 
-  function ensureShareMenuItem(root) {
-    // Пытаемся найти открытое меню/поповер и вставить пункт.
-    // Это best-effort: разметка у ChatGPT часто меняется.
-    if (getChatArticles().length <= KEEP_LAST) return;
-
-    const menus = Array.from(root.querySelectorAll('[role="menu"], [role="dialog"]'));
-    for (const menu of menus) {
-      if (menu.querySelector(`[${MENU_ATTR}="1"]`)) continue;
-
-      // В меню обычно есть кнопки/элементы списка — ищем контейнер с интерактивными кнопками.
-      const container =
-        menu.querySelector('[role="menu"]') ??
-        menu.querySelector("div") ??
-        null;
-      if (!container) continue;
-
-      const item = document.createElement("button");
-      item.type = "button";
-      item.setAttribute(MENU_ATTR, "1");
-      item.textContent = MENU_TEXT;
-      item.style.display = "block";
-      item.style.width = "100%";
-      item.style.textAlign = "left";
-      item.style.padding = "10px 12px";
-      item.style.border = "0";
-      item.style.background = "transparent";
-      item.style.color = "inherit";
-      item.style.cursor = "pointer";
-      item.style.borderRadius = "10px";
-      item.setAttribute("aria-label", ARIA_LABEL);
-      item.setAttribute("title", ARIA_LABEL);
-
-      item.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        runAndToast();
-      });
-
-      container.appendChild(item);
-      break;
-    }
-  }
-
+  /**
+   * Единая точка “обновления” UI-инъекции:
+   * - кнопка в хедере рядом с “Поделиться/Share”
+   */
   function boot() {
     ensureHeaderButton();
-    ensureShareMenuItem(document);
   }
 
   // Первичный запуск + наблюдатель (React часто перерисовывает хедер/менюшки).

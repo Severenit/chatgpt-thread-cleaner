@@ -38,12 +38,31 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return true; // keep sendResponse alive for async
 });
 
+/**
+ * Возвращает `tabId` активной вкладки в текущем окне.
+ *
+ * Используется сервис-воркером, когда popup отправляет команду очистки.
+ *
+ * @returns {Promise<number>} ID активной вкладки.
+ * @throws {Error} Если активную вкладку определить не удалось (нет `tab.id`).
+ */
 async function getActiveTabId() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("Не нашёл активную вкладку.");
   return tab.id;
 }
 
+/**
+ * Запускает очистку DOM на вкладке через `chrome.scripting.executeScript`.
+ *
+ * Важно: инжект происходит в контекст страницы. Функция `cleanChatDom` должна быть
+ * самодостаточной (без замыканий на переменные service worker).
+ *
+ * @param {number} tabId - ID вкладки, на которой выполняем очистку.
+ * @param {number} keepLast - Сколько последних сообщений оставить (округляется вниз, минимум 0).
+ * @returns {Promise<{total:number, removed:number, kept:number}>} Результат очистки.
+ * @throws {Error} Если `executeScript` не вернул результат.
+ */
 async function runCleanupOnTab(tabId, keepLast) {
   const keep = Math.max(0, Math.floor(keepLast));
 
@@ -60,6 +79,15 @@ async function runCleanupOnTab(tabId, keepLast) {
   return injected[0].result;
 }
 
+/**
+ * Чистит DOM текущего диалога ChatGPT: удаляет старые узлы сообщений (`article`),
+ * оставляя последние `keepLast`.
+ *
+ * Скоуп ограничен `main`, чтобы не удалять `article` в других частях страницы.
+ *
+ * @param {number} keepLast - Сколько последних сообщений оставить.
+ * @returns {{total:number, removed:number, kept:number}} Счётчики до/после.
+ */
 function cleanChatDom(keepLast) {
   const keep = Math.max(0, Math.floor(Number(keepLast)));
 

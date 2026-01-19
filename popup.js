@@ -3,6 +3,11 @@ const KEEP_LAST = 3;
 const cleanBtn = document.getElementById("clean");
 const statusEl = document.getElementById("status");
 
+/**
+ * Обновляет текст статуса в popup.
+ *
+ * @param {string} text - Текст, который покажем пользователю.
+ */
 function setStatus(text) {
   statusEl.textContent = text;
 }
@@ -34,6 +39,19 @@ cleanBtn.addEventListener("click", async () => {
   }
 });
 
+/**
+ * Best-effort: подтягивает типографику (font-*) со страницы активной вкладки и
+ * применяет её к popup через CSS variables (`--chatgpt-*`).
+ *
+ * Это нужно, чтобы popup визуально “сливался” с текущей темой/шрифтами ChatGPT.
+ *
+ * Ограничения:
+ * - Сработает только если активная вкладка позволяет `executeScript`
+ *   (в нашем случае — на `chatgpt.com` / `chat.openai.com`).
+ * - Если инжект невозможен/запрещён, функция просто молча завершается.
+ *
+ * @returns {Promise<void>}
+ */
 async function applyFontFromActiveTab() {
   if (!chrome?.tabs?.query || !chrome?.scripting?.executeScript) return;
 
