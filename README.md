@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icons/128.png" width="96" height="96" alt="ChatGPT Thread Cleaner icon" />
+  <img src="logo.png" width="256" height="256" alt="ChatGPT Thread Cleaner logo" />
 </p>
 
 # ChatGPT Thread Cleaner
