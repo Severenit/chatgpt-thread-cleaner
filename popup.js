@@ -1,4 +1,4 @@
-const KEEP_LAST = 3;
+const KEEP_LAST = 4;
 
 const cleanBtn = document.getElementById("clean");
 const statusEl = document.getElementById("status");

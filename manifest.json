@@ -1,7 +1,7 @@
 {
   "name": "ChatGPT Thread Cleaner",
   "short_name": "Thread Cleaner",
-  "description": "Разгружает большие чаты ChatGPT: удаляет старые сообщения из DOM, оставляя последние 3.",
+  "description": "Разгружает большие чаты ChatGPT: удаляет старые сообщения из DOM, оставляя последние 4.",
   "version": "0.1.0",
   "manifest_version": 3,
   "permissions": ["activeTab", "scripting", "contextMenus"],

@@ -1,11 +1,11 @@
 const MENU_ID = "chatgpt-dom-cleaner:clean";
-const KEEP_LAST_DEFAULT = 3;
+const KEEP_LAST_DEFAULT = 4;
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_ID,
-      title: "Очистить DOM узлы в чате (оставить 3)",
+      title: "Очистить DOM узлы в чате (оставить 4)",
       contexts: ["page", "action"],
       documentUrlPatterns: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
     });

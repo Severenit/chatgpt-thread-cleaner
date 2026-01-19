@@ -1,10 +1,10 @@
 (() => {
-  const KEEP_LAST = 3;
+  const KEEP_LAST = 4;
   const BTN_ATTR = "data-chatgpt-dom-cleaner-btn";
   const ICON_HREF = "/cdn/assets/sprites-core-k5zux585.svg#a5ec30";
   const BUTTON_TEXT = "Разгрузить чат";
-  const MENU_TEXT = "Разгрузить чат (оставить 3)";
-  const ARIA_LABEL = "Разгрузить чат (удалить старые сообщения из DOM, оставить 3)";
+  const MENU_TEXT = "Разгрузить чат (оставить 4)";
+  const ARIA_LABEL = "Разгрузить чат (удалить старые сообщения из DOM, оставить 4)";
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
 
@@ -221,7 +221,7 @@
    * Fallback-кнопка, если не удалось найти/клонировать Share.
    * Даёт базовую функциональность без зависимости от классов ChatGPT UI.
    *
-   * @returns {HTMLButtonElement} Кнопка “Разгрузить чат (оставить 3)”.
+   * @returns {HTMLButtonElement} Кнопка “Разгрузить чат (оставить 4)”.
    */
   function createFallbackCleanerButton() {
     const btn = document.createElement("button");
