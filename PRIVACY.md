@@ -1,8 +1,8 @@
-# Privacy Policy — ChatGPT DOM Cleaner
+# Privacy Policy — ChatGPT Thread Cleaner
 
 ## Summary
 
-ChatGPT DOM Cleaner does not collect, store, or transmit personal data.
+ChatGPT Thread Cleaner does not collect, store, or transmit personal data.
 
 ## Data collection
 

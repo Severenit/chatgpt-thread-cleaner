@@ -1,12 +1,12 @@
 (() => {
-  const KEEP_LAST = 4;
+  const DEFAULT_KEEP_LAST = 4;
+  const STORAGE_KEY_KEEP_LAST = "keepLast";
   const BTN_ATTR = "data-chatgpt-dom-cleaner-btn";
   const ICON_HREF = "/cdn/assets/sprites-core-k5zux585.svg#a5ec30";
   const BUTTON_TEXT = "Разгрузить чат";
-  const MENU_TEXT = "Разгрузить чат (оставить 4)";
-  const ARIA_LABEL = "Разгрузить чат (удалить старые сообщения из DOM, оставить 4)";
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
+  let keepLast = DEFAULT_KEEP_LAST;
 
   /**
    * Возвращает список DOM-узлов сообщений текущего диалога.
@@ -34,8 +34,8 @@
    * @param {number} keepLast - Сколько последних сообщений оставить.
    * @returns {{total:number, removed:number, kept:number}} Счётчики до/после.
    */
-  function cleanChatDom(keepLast) {
-    const keep = Math.max(0, Math.floor(Number(keepLast)));
+  function cleanChatDom(keepLastArg) {
+    const keep = sanitizeKeepLast(keepLastArg);
     const nodes = getChatArticles();
 
     const total = nodes.length;
@@ -52,7 +52,7 @@
    * Сайд-эффект: удаляет DOM-узлы сообщений.
    */
   function runAndToast() {
-    const { total, removed, kept } = cleanChatDom(KEEP_LAST);
+    const { total, removed, kept } = cleanChatDom(keepLast);
     toast(`Разгрузка чата: удалено ${removed} из ${total}, оставлено ${kept}`);
   }
 
@@ -103,7 +103,7 @@
    * Встраивает кнопку “Разгрузить чат” в хедер ChatGPT (рядом с “Поделиться”),
    * либо обновляет видимость уже существующей.
    *
-   * Кнопка показывается только если сообщений > KEEP_LAST.
+   * Кнопка показывается только если сообщений > keepLast.
    */
   function ensureHeaderButton() {
     const header =
@@ -142,6 +142,7 @@
     }
 
     updateHeaderButtonVisibility(btn);
+    updateHeaderButtonLabel(btn);
   }
 
   /**
@@ -152,8 +153,24 @@
   function updateHeaderButtonVisibility(btn) {
     // В новом чате/когда сообщений мало — кнопка не нужна.
     const total = getChatArticles().length;
-    const shouldShow = total > KEEP_LAST;
+    const shouldShow = total > keepLast;
     btn.style.display = shouldShow ? "" : "none";
+  }
+
+  /**
+   * Обновляет label/tooltip у кнопки (поскольку keepLast настраиваемый).
+   *
+   * @param {HTMLButtonElement} btn
+   */
+  function updateHeaderButtonLabel(btn) {
+    const aria = `Разгрузить чат (удалить старые сообщения из DOM, оставить ${keepLast})`;
+    btn.setAttribute("aria-label", aria);
+    btn.setAttribute("title", aria);
+
+    // Если это наш fallback (без ChatGPT разметки) — обновим текст.
+    if (!btn.querySelector("svg")) {
+      btn.textContent = `Разгрузить чат (оставить ${keepLast})`;
+    }
   }
 
   /**
@@ -187,8 +204,7 @@
     // Снимаем специфичные для Share атрибуты, чтобы не ломать логику страницы.
     btn.removeAttribute("data-testid");
     btn.removeAttribute("style"); // view-transition-name
-    btn.setAttribute("aria-label", ARIA_LABEL);
-    btn.setAttribute("title", ARIA_LABEL);
+    // aria/title выставляем динамически в updateHeaderButtonLabel()
 
     // Небольшой отступ от Share влево.
     btn.classList.add("mr-2");
@@ -226,9 +242,7 @@
   function createFallbackCleanerButton() {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = MENU_TEXT;
-    btn.setAttribute("aria-label", ARIA_LABEL);
-    btn.setAttribute("title", ARIA_LABEL);
+    btn.textContent = `Разгрузить чат (оставить ${keepLast})`;
     btn.style.marginLeft = "8px";
     btn.style.padding = "6px 10px";
     btn.style.borderRadius = "10px";
@@ -249,8 +263,42 @@
     ensureHeaderButton();
   }
 
+  /**
+   * Нормализует keepLast: число, целое, диапазон [1..99].
+   *
+   * @param {unknown} v
+   * @returns {number}
+   */
+  function sanitizeKeepLast(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return DEFAULT_KEEP_LAST;
+    return Math.min(99, Math.max(1, Math.floor(n)));
+  }
+
+  /**
+   * Подтягивает keepLast из chrome.storage.sync и обновляет UI/логику.
+   *
+   * @returns {Promise<void>}
+   */
+  async function syncKeepLastFromStorage() {
+    try {
+      const raw = await chrome.storage.sync.get([STORAGE_KEY_KEEP_LAST]);
+      keepLast = sanitizeKeepLast(raw?.[STORAGE_KEY_KEEP_LAST]);
+      boot();
+    } catch {
+      // ignore
+    }
+  }
+
   // Первичный запуск + наблюдатель (React часто перерисовывает хедер/менюшки).
   boot();
+  void syncKeepLastFromStorage();
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "sync") return;
+    if (!changes?.[STORAGE_KEY_KEEP_LAST]) return;
+    keepLast = sanitizeKeepLast(changes[STORAGE_KEY_KEEP_LAST]?.newValue);
+    boot();
+  });
   const mo = new MutationObserver(() => boot());
   mo.observe(document.documentElement, { subtree: true, childList: true });
 })();

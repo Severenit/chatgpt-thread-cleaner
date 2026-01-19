@@ -1,21 +1,28 @@
 const MENU_ID = "chatgpt-dom-cleaner:clean";
 const KEEP_LAST_DEFAULT = 4;
+const STORAGE_KEY_KEEP_LAST = "keepLast";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: MENU_ID,
-      title: "Очистить DOM узлы в чате (оставить 4)",
+      title: `Очистить DOM узлы в чате (оставить ${KEEP_LAST_DEFAULT})`,
       contexts: ["page", "action"],
       documentUrlPatterns: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
     });
+
+    // Best-effort: подтянуть значение из storage и обновить label.
+    void syncContextMenuTitleFromStorage();
   });
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== MENU_ID) return;
   if (!tab?.id) return;
-  runCleanupOnTab(tab.id, KEEP_LAST_DEFAULT);
+  (async () => {
+    const keepLast = await getKeepLastFromStorage();
+    await runCleanupOnTab(tab.id, keepLast);
+  })();
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -23,7 +30,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   (async () => {
     try {
-      const keepLast = Number.isFinite(msg.keepLast) ? msg.keepLast : KEEP_LAST_DEFAULT;
+      const keepLast = Number.isFinite(msg.keepLast)
+        ? msg.keepLast
+        : await getKeepLastFromStorage();
       const tabId = await getActiveTabId();
       const result = await runCleanupOnTab(tabId, keepLast);
       sendResponse({ ok: true, result });
@@ -37,6 +46,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   return true; // keep sendResponse alive for async
 });
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "sync") return;
+  if (!changes?.[STORAGE_KEY_KEEP_LAST]) return;
+  void syncContextMenuTitleFromStorage();
+});
+
+/**
+ * Читает keepLast из `chrome.storage.sync` с нормализацией.
+ *
+ * @returns {Promise<number>}
+ */
+async function getKeepLastFromStorage() {
+  const raw = await chrome.storage.sync.get([STORAGE_KEY_KEEP_LAST]);
+  return sanitizeKeepLast(raw?.[STORAGE_KEY_KEEP_LAST]);
+}
+
+/**
+ * Обновляет title у пункта контекстного меню под текущее значение keepLast.
+ *
+ * @returns {Promise<void>}
+ */
+async function syncContextMenuTitleFromStorage() {
+  try {
+    const keepLast = await getKeepLastFromStorage();
+    chrome.contextMenus.update(MENU_ID, {
+      title: `Очистить DOM узлы в чате (оставить ${keepLast})`
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Нормализует keepLast: число, целое, диапазон [1..99].
+ *
+ * @param {unknown} v
+ * @returns {number}
+ */
+function sanitizeKeepLast(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return KEEP_LAST_DEFAULT;
+  return Math.min(99, Math.max(1, Math.floor(n)));
+}
 
 /**
  * Возвращает `tabId` активной вкладки в текущем окне.

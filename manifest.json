@@ -1,10 +1,10 @@
 {
   "name": "ChatGPT Thread Cleaner",
   "short_name": "Thread Cleaner",
-  "description": "Разгружает большие чаты ChatGPT: удаляет старые сообщения из DOM, оставляя последние 4.",
-  "version": "0.1.0",
+  "description": "Разгружает большие чаты ChatGPT: удаляет старые сообщения из DOM, оставляя последние N (по умолчанию 4).",
+  "version": "0.1.1",
   "manifest_version": 3,
-  "permissions": ["activeTab", "scripting", "contextMenus"],
+  "permissions": ["activeTab", "scripting", "contextMenus", "storage"],
   "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
   "background": {
     "service_worker": "background.js"

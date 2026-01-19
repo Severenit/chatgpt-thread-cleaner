@@ -24,6 +24,26 @@ body {
   gap: 10px;
 }
 
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: color-mix(in oklab, CanvasText 70%, Canvas 30%);
+}
+
+.input {
+  appearance: none;
+  border: 1px solid color-mix(in oklab, CanvasText 22%, Canvas 78%);
+  background: color-mix(in oklab, CanvasText 3%, Canvas 97%);
+  color: CanvasText;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
 .title {
   margin: 0;
   font-size: 14px;

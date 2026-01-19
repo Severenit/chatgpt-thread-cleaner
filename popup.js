@@ -1,7 +1,9 @@
-const KEEP_LAST = 4;
+const DEFAULT_KEEP_LAST = 4;
+const STORAGE_KEY_KEEP_LAST = "keepLast";
 
 const cleanBtn = document.getElementById("clean");
 const statusEl = document.getElementById("status");
+const keepLastInput = document.getElementById("keepLast");
 
 /**
  * Обновляет текст статуса в popup.
@@ -15,14 +17,17 @@ function setStatus(text) {
 // Best-effort: подтянуть typographic settings из активной вкладки ChatGPT, чтобы popup выглядел нативно.
 applyFontFromActiveTab().catch(() => {});
 
+initSettings().catch(() => {});
+
 cleanBtn.addEventListener("click", async () => {
   cleanBtn.disabled = true;
   setStatus("Чищу...");
 
   try {
+    const keepLast = await getKeepLast();
     const res = await chrome.runtime.sendMessage({
       type: "CLEAN_CHAT_DOM",
-      keepLast: KEEP_LAST
+      keepLast
     });
 
     if (!res?.ok) {
@@ -38,6 +43,74 @@ cleanBtn.addEventListener("click", async () => {
     cleanBtn.disabled = false;
   }
 });
+
+/**
+ * Инициализирует UI-настройку keepLast:
+ * - читает значение из storage (или берёт default)
+ * - обновляет input и подпись кнопки
+ * - сохраняет изменения по input
+ *
+ * @returns {Promise<void>}
+ */
+async function initSettings() {
+  const keepLast = await getKeepLast();
+  keepLastInput.value = String(keepLast);
+  updateCleanButtonLabel(keepLast);
+
+  keepLastInput.addEventListener("change", async () => {
+    const next = sanitizeKeepLast(keepLastInput.value);
+    keepLastInput.value = String(next);
+    await setKeepLast(next);
+    updateCleanButtonLabel(next);
+    setStatus("");
+  });
+
+  keepLastInput.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    keepLastInput.blur();
+  });
+}
+
+/**
+ * Обновляет текст кнопки запуска в popup.
+ *
+ * @param {number} keepLast
+ */
+function updateCleanButtonLabel(keepLast) {
+  cleanBtn.textContent = `Очистить DOM (оставить ${keepLast})`;
+}
+
+/**
+ * Читает keepLast из `chrome.storage.sync`.
+ *
+ * @returns {Promise<number>}
+ */
+async function getKeepLast() {
+  const raw = await chrome.storage.sync.get([STORAGE_KEY_KEEP_LAST]);
+  return sanitizeKeepLast(raw?.[STORAGE_KEY_KEEP_LAST]);
+}
+
+/**
+ * Записывает keepLast в `chrome.storage.sync`.
+ *
+ * @param {number} keepLast
+ * @returns {Promise<void>}
+ */
+async function setKeepLast(keepLast) {
+  await chrome.storage.sync.set({ [STORAGE_KEY_KEEP_LAST]: sanitizeKeepLast(keepLast) });
+}
+
+/**
+ * Нормализует ввод пользователя.
+ *
+ * @param {unknown} v
+ * @returns {number}
+ */
+function sanitizeKeepLast(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return DEFAULT_KEEP_LAST;
+  return Math.min(99, Math.max(1, Math.floor(n)));
+}
 
 /**
  * Best-effort: подтягивает типографику (font-*) со страницы активной вкладки и
