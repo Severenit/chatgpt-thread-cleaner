@@ -149,8 +149,8 @@ function cleanChatDom(keepLast) {
   const IDB_VERSION = 2;
   /** Название objectStore в IndexedDB. */
   const IDB_STORE = "removedMessages";
-  /** Лимит истории удалённых сообщений (null = без лимита). */
-  const MAX_REMOVED_CACHE = null;
+  /** Лимит истории удалённых сообщений на диалог (по количеству записей). */
+  const MAX_REMOVED_CACHE = 500;
 
   const root = document.querySelector("main") ?? document.body;
 

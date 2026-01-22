@@ -12,8 +12,8 @@
   const RESTORE_BATCH_SIZE = 8;
   /** Максимум восстановлений за один заход к верху. */
   const RESTORE_MAX_PER_EDGE = 2;
-  /** Лимит истории удалённых сообщений (null = без лимита). */
-  const MAX_REMOVED_CACHE = null;
+  /** Лимит истории удалённых сообщений на диалог (по количеству записей). */
+  const MAX_REMOVED_CACHE = 500;
   /** Имя базы IndexedDB. */
   const IDB_NAME = "chatgpt-dom-cleaner";
   /** Версия базы IndexedDB (для миграций схемы). */
@@ -28,6 +28,7 @@
   let scrollListener = null;
   let hasUserScrolled = false;
   let restoreInProgress = false;
+  let bootScheduled = false;
   const preventScroll = (e) => e.preventDefault();
 
   /**
@@ -144,11 +145,6 @@
   const getConversationKey = () => `${location.pathname}`;
 
   /**
-   * Открывает IndexedDB.
-   *
-   * @returns {Promise<IDBDatabase>}
-   */
-  /**
    * Открывает IndexedDB и гарантирует наличие индексов.
    *
    * @returns {Promise<IDBDatabase>}
@@ -196,52 +192,39 @@
    * @param {string} conversationKey
    * @returns {Promise<void>}
    */
-  /**
-   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
-   *
-   * @param {IDBDatabase} db
-   * @param {string} conversationKey
-   * @returns {Promise<void>}
-   */
   const pruneConversation = (db, conversationKey) => {
     if (!Number.isFinite(MAX_REMOVED_CACHE)) return Promise.resolve();
     return new Promise((resolve, reject) => {
-    const tx = db.transaction(IDB_STORE, "readwrite");
-    const store = tx.objectStore(IDB_STORE);
-    const index = store.index("conversationKey_createdAt");
-    const range = IDBKeyRange.bound(
-      [conversationKey, 0],
-      [conversationKey, Number.MAX_SAFE_INTEGER]
-    );
-    const keys = [];
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const index = store.index("conversationKey_createdAt");
+      const range = IDBKeyRange.bound(
+        [conversationKey, 0],
+        [conversationKey, Number.MAX_SAFE_INTEGER]
+      );
+      const keys = [];
 
-    index.openCursor(range, "next").onsuccess = (e) => {
-      const cursor = e.target.result;
-      if (cursor) {
-        keys.push(cursor.primaryKey);
-        cursor.continue();
-        return;
-      }
-
-      const excess = keys.length - MAX_REMOVED_CACHE;
-      if (excess > 0) {
-        for (let i = 0; i < excess; i += 1) {
-          store.delete(keys[i]);
+      index.openCursor(range, "next").onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          keys.push(cursor.primaryKey);
+          cursor.continue();
+          return;
         }
-      }
-    };
 
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error("IDB prune failed"));
-  });
+        const excess = keys.length - MAX_REMOVED_CACHE;
+        if (excess > 0) {
+          for (let i = 0; i < excess; i += 1) {
+            store.delete(keys[i]);
+          }
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IDB prune failed"));
+    });
   };
 
-  /**
-   * Добавляет пачку удалённых сообщений в IndexedDB.
-   *
-   * @param {string[]} htmlList
-   * @returns {Promise<void>}
-   */
   /**
    * Добавляет пачку удалённых сообщений в IndexedDB.
    *
@@ -271,12 +254,6 @@
     await pruneConversation(db, conversationKey);
   };
 
-  /**
-   * Забирает последние N удалённых сообщений и удаляет их из IndexedDB.
-   *
-   * @param {number} count
-   * @returns {Promise<string[]>}
-   */
   /**
    * Забирает последние N удалённых сообщений и удаляет их из IndexedDB.
    *
@@ -320,12 +297,6 @@
    * @param {number} count
    * @returns {Promise<number>} Сколько реально восстановили.
    */
-  /**
-   * Восстанавливает ранее удалённые сообщения в начало чата.
-   *
-   * @param {number} count
-   * @returns {Promise<number>} Сколько реально восстановили.
-   */
   const restoreMessagesAtTop = async (count) => {
     if (restoreInProgress) return 0;
     restoreInProgress = true;
@@ -360,11 +331,6 @@
    *
    * @returns {HTMLElement}
    */
-  /**
-   * Находит наиболее вероятный скролл-контейнер чата.
-   *
-   * @returns {HTMLElement}
-   */
   function getScrollContainer() {
     const articles = getChatArticles();
     const root = document.querySelector("main") ?? document.body;
@@ -390,12 +356,6 @@
   }
 
   /**
-   * Проверяет, достигнут ли верх/низ страницы, и показывает уведомление.
-   *
-   * @param {HTMLElement} target
-   * @returns {void}
-   */
-  /**
    * Проверяет достижение верхней/нижней границы и триггерит действия.
    *
    * @param {HTMLElement} target
@@ -413,30 +373,30 @@
         window.addEventListener("wheel", preventScroll, { passive: false });
         window.addEventListener("touchmove", preventScroll, { passive: false });
         try {
-        let totalRestored = 0;
-        while (totalRestored < RESTORE_MAX_PER_EDGE) {
-          const restored = await restoreMessagesAtTop(RESTORE_BATCH_SIZE);
-          if (restored <= 0) break;
-          totalRestored += restored;
-          // если после добавления всё ещё у самого верха — продолжаем
-          const root = scrollTarget ?? getScrollRoot();
-          if (root.scrollTop > SCROLL_EDGE_PX) break;
-        }
+          let totalRestored = 0;
+          while (totalRestored < RESTORE_MAX_PER_EDGE) {
+            const restored = await restoreMessagesAtTop(RESTORE_BATCH_SIZE);
+            if (restored <= 0) break;
+            totalRestored += restored;
+            // если после добавления всё ещё у самого верха — продолжаем
+            const root = scrollTarget ?? getScrollRoot();
+            if (root.scrollTop > SCROLL_EDGE_PX) break;
+          }
 
-        if (totalRestored > 0) {
-          const root = scrollTarget ?? getScrollRoot();
-          requestAnimationFrame(() => {
-            root.scrollTop = Math.max(0, root.scrollTop + 12);
-            lastEdge = null;
-          });
-          console.log(
-            `[chatgpt-dom-cleaner] Восстановлено ${totalRestored} сообщений.`
-          );
-          toast(`Восстановлено ${totalRestored} сообщений`);
-        } else {
-          console.log("[chatgpt-dom-cleaner] Больше нет сохранённых сообщений.");
-          toast("Больше нет сохранённых сообщений");
-        }
+          if (totalRestored > 0) {
+            const root = scrollTarget ?? getScrollRoot();
+            requestAnimationFrame(() => {
+              root.scrollTop = Math.max(0, root.scrollTop + 12);
+              lastEdge = null;
+            });
+            console.log(
+              `[chatgpt-dom-cleaner] Восстановлено ${totalRestored} сообщений.`
+            );
+            toast(`Восстановлено ${totalRestored} сообщений`);
+          } else {
+            console.log("[chatgpt-dom-cleaner] Больше нет сохранённых сообщений.");
+            toast("Больше нет сохранённых сообщений");
+          }
         } finally {
           window.removeEventListener("wheel", preventScroll);
           window.removeEventListener("touchmove", preventScroll);
@@ -457,11 +417,6 @@
     }
   }
 
-  /**
-   * Ставит троттлинг на scroll и показывает состояние верха/низа.
-   *
-   * @returns {void}
-   */
   /**
    * Включает наблюдение за скроллом чата (однократно/с ребайндом).
    *
@@ -683,6 +638,23 @@
   }
 
   /**
+   * Троттлит `boot()`: не чаще 1 раза за frame.
+   *
+   * MutationObserver на ChatGPT может стрелять очень часто, поэтому запускаем
+   * пере-инициализацию только через rAF.
+   *
+   * @returns {void}
+   */
+  function scheduleBoot() {
+    if (bootScheduled) return;
+    bootScheduled = true;
+    requestAnimationFrame(() => {
+      bootScheduled = false;
+      boot();
+    });
+  }
+
+  /**
    * Нормализует keepLast: число, целое, диапазон [1..99].
    *
    * @param {unknown} v
@@ -703,7 +675,7 @@
     try {
       const raw = await chrome.storage.sync.get([STORAGE_KEY_KEEP_LAST]);
       keepLast = sanitizeKeepLast(raw?.[STORAGE_KEY_KEEP_LAST]);
-      boot();
+      scheduleBoot();
     } catch {
       // ignore
     }
@@ -716,9 +688,9 @@
     if (areaName !== "sync") return;
     if (!changes?.[STORAGE_KEY_KEEP_LAST]) return;
     keepLast = sanitizeKeepLast(changes[STORAGE_KEY_KEEP_LAST]?.newValue);
-    boot();
+    scheduleBoot();
   });
-  const mo = new MutationObserver(() => boot());
+  const mo = new MutationObserver(() => scheduleBoot());
   mo.observe(document.documentElement, { subtree: true, childList: true });
 })();
 
