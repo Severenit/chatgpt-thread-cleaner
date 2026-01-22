@@ -4,51 +4,56 @@
 
 # ChatGPT Thread Cleaner
 
-Разгружает длинные переписки в ChatGPT: удаляет старые сообщения из DOM, оставляя последние N (по умолчанию 4) — Chrome перестаёт лагать на огромных тредах.
+Lightens long ChatGPT threads: removes old messages from the DOM, keeping the last N (default: 4) — Chrome stays fast even on huge conversations.
 
-## Фичи
+## Features
 
-- Очищает DOM сообщений **только в рамках диалога** (внутри `main`)
-- Оставляет **последние N** сообщений (по умолчанию 4)
-- Триггеры:
-  - кнопка в UI ChatGPT (**появляется только если сообщений > N**)
-  - popup расширения
-  - пункт в контекстном меню
-- Никаких сетевых запросов/аналитики — всё локально
+- Cleans message DOM **only within the current conversation** (scoped to `main`)
+- Keeps **the last N** messages (default: 4)
+- Triggers:
+  - a button in ChatGPT UI (**only shown if messages > N**)
+  - extension popup
+  - context menu item
+- No network requests / analytics — everything is local
 
-## Поддерживаемые домены
+## Supported domains
 
 - `chatgpt.com`
 - `chat.openai.com`
 
-## Установка (Load unpacked)
+## Installation (Load unpacked)
 
-1. Открой `chrome://extensions`
-2. Включи **Developer mode**
-3. Нажми **Load unpacked**
-4. Выбери папку проекта (где лежит `manifest.json`)
+1. Open `chrome://extensions`
+2. Enable **Developer mode**
+3. Click **Load unpacked**
+4. Select the project folder (where `manifest.json` is)
 
-## Использование
+## Usage
 
-- **Кнопка в интерфейсе ChatGPT**: `Разгрузить чат`
-- **Popup**: выстави `Оставлять сообщений` → нажми `Очистить DOM`
-- **Контекстное меню**: ПКМ по странице → `Очистить DOM узлы в чате (оставить N)`
+- **ChatGPT UI button**: `Lighten chat`
+- **Popup**: set `Keep last messages` → click `Clean DOM`
+- **Context menu**: right click page → `Clean chat DOM nodes (keep N)`
 
-## Как это работает
+## How it works
 
-- Сообщения ищутся по `article[data-testid^="conversation-turn"]`.
-- Если разметка поменялась — fallback на `article`.
-- В любом случае поиск и удаление ограничены `main`, чтобы не снести “лишние” `article` вне диалога.
+- Messages are located via `article[data-testid^="conversation-turn"]`.
+- If markup changes — fallback to `article`.
+- In any case, search and removal are scoped to `main` to avoid touching unrelated `article` elements outside the conversation.
 
-## Сборка zip для Chrome Web Store
+## Build a zip for Chrome Web Store
 
 ```bash
 npm run build:zip
 ```
 
-Архив появится в корне проекта с версией из `manifest.json`, например:
+The archive will appear in the project root with the version from `manifest.json`, e.g.:
 - `chatgpt-thread-cleaner-webstore-v0.1.0.zip`
+
+## Internationalization (i18n)
+
+- Default locale: **English** (`default_locale: "en"` in `manifest.json`)
+- UI strings are localized via `chrome.i18n` and live in `/_locales/*/messages.json` (currently `en` and `ru`).
 
 ## Privacy
 
-См. `PRIVACY.md`.
+See `PRIVACY.md`.

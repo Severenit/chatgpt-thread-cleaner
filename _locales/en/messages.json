@@ -1,0 +1,139 @@
+{
+  "extName": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Extension name"
+  },
+  "extShortName": {
+    "message": "Thread Cleaner",
+    "description": "Extension short name"
+  },
+  "extDescription": {
+    "message": "Lightens long ChatGPT threads: removes old messages from the DOM, keeping the last N (default 4).",
+    "description": "Extension description"
+  },
+  "actionTitle": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Toolbar action title"
+  },
+  "popupTitle": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Popup title/header"
+  },
+  "languageLabel": {
+    "message": "Language",
+    "description": "Label for language override setting"
+  },
+  "languageAuto": {
+    "message": "Auto (Chrome)",
+    "description": "Language option: follow Chrome UI language"
+  },
+  "languageEnglish": {
+    "message": "English",
+    "description": "Language option: English"
+  },
+  "languageRussian": {
+    "message": "Russian",
+    "description": "Language option: Russian"
+  },
+  "keepLastLabel": {
+    "message": "Keep last messages",
+    "description": "Label for keepLast input"
+  },
+  "cleanButton": {
+    "message": "Clean DOM",
+    "description": "Popup clean button label"
+  },
+  "cleanButtonWithKeep": {
+    "message": "Clean DOM (keep $count$)",
+    "description": "Popup clean button label with keepLast number",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "statusCleaning": {
+    "message": "Cleaning...",
+    "description": "Popup status while cleaning"
+  },
+  "statusUnknownError": {
+    "message": "Unknown error.",
+    "description": "Fallback error text"
+  },
+  "statusRemovedSummary": {
+    "message": "Removed $removed$ of $total$. Kept $kept$.",
+    "description": "Popup status summary after cleanup",
+    "placeholders": {
+      "removed": { "content": "$1", "example": "10" },
+      "total": { "content": "$2", "example": "30" },
+      "kept": { "content": "$3", "example": "4" }
+    }
+  },
+  "statusErrorPrefix": {
+    "message": "Error: $details$",
+    "description": "Popup status error prefix",
+    "placeholders": {
+      "details": { "content": "$1", "example": "executeScript returned no result." }
+    }
+  },
+  "hintDomains": {
+    "message": "Works on chatgpt.com and chat.openai.com",
+    "description": "Popup hint about supported domains"
+  },
+  "contextMenuTitle": {
+    "message": "Clean chat DOM nodes (keep $count$)",
+    "description": "Context menu item title",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "errNoActiveTab": {
+    "message": "Couldn't find the active tab.",
+    "description": "Background error when no active tab"
+  },
+  "errExecuteScriptNoResult": {
+    "message": "executeScript returned no result.",
+    "description": "Background error when executeScript has no results"
+  },
+  "inpageButtonText": {
+    "message": "Lighten chat",
+    "description": "Injected ChatGPT header button text"
+  },
+  "inpageToastCleanupSummary": {
+    "message": "Chat cleanup: removed $removed$ of $total$, kept $kept$",
+    "description": "Toast after cleanup",
+    "placeholders": {
+      "removed": { "content": "$1", "example": "10" },
+      "total": { "content": "$2", "example": "30" },
+      "kept": { "content": "$3", "example": "4" }
+    }
+  },
+  "inpageAriaLabel": {
+    "message": "Lighten chat (remove old messages from the DOM, keep $count$)",
+    "description": "ARIA label/title for injected button",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "inpageFallbackButtonText": {
+    "message": "Lighten chat (keep $count$)",
+    "description": "Fallback injected button text (no SVG)",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "inpageToastRestored": {
+    "message": "Restored $count$ messages",
+    "description": "Toast after restoring messages",
+    "placeholders": {
+      "count": { "content": "$1", "example": "8" }
+    }
+  },
+  "inpageToastNoSavedMessages": {
+    "message": "No saved messages left",
+    "description": "Toast when there is nothing to restore"
+  },
+  "inpageToastBottom": {
+    "message": "Scrolled to the very bottom",
+    "description": "Toast when user reaches bottom edge"
+  }
+}
+

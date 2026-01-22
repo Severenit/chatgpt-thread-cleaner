@@ -1,0 +1,139 @@
+{
+  "extName": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Название расширения"
+  },
+  "extShortName": {
+    "message": "Thread Cleaner",
+    "description": "Короткое название расширения"
+  },
+  "extDescription": {
+    "message": "Разгружает большие чаты ChatGPT: удаляет старые сообщения из DOM, оставляя последние N (по умолчанию 4).",
+    "description": "Описание расширения"
+  },
+  "actionTitle": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Подсказка кнопки расширения в тулбаре"
+  },
+  "popupTitle": {
+    "message": "ChatGPT Thread Cleaner",
+    "description": "Заголовок/тайтл popup"
+  },
+  "languageLabel": {
+    "message": "Язык",
+    "description": "Лейбл настройки выбора языка"
+  },
+  "languageAuto": {
+    "message": "Авто (язык Chrome)",
+    "description": "Опция языка: следовать языку UI Chrome"
+  },
+  "languageEnglish": {
+    "message": "English",
+    "description": "Опция языка: английский"
+  },
+  "languageRussian": {
+    "message": "Русский",
+    "description": "Опция языка: русский"
+  },
+  "keepLastLabel": {
+    "message": "Оставлять сообщений",
+    "description": "Лейбл для keepLast"
+  },
+  "cleanButton": {
+    "message": "Очистить DOM",
+    "description": "Текст кнопки в popup"
+  },
+  "cleanButtonWithKeep": {
+    "message": "Очистить DOM (оставить $count$)",
+    "description": "Текст кнопки в popup с числом keepLast",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "statusCleaning": {
+    "message": "Чищу...",
+    "description": "Статус во время чистки"
+  },
+  "statusUnknownError": {
+    "message": "Неизвестная ошибка.",
+    "description": "Фолбэк ошибка"
+  },
+  "statusRemovedSummary": {
+    "message": "Удалено $removed$ из $total$. Оставлено $kept$.",
+    "description": "Статус после чистки",
+    "placeholders": {
+      "removed": { "content": "$1", "example": "10" },
+      "total": { "content": "$2", "example": "30" },
+      "kept": { "content": "$3", "example": "4" }
+    }
+  },
+  "statusErrorPrefix": {
+    "message": "Ошибка: $details$",
+    "description": "Префикс ошибки в статусе popup",
+    "placeholders": {
+      "details": { "content": "$1", "example": "executeScript не вернул результат." }
+    }
+  },
+  "hintDomains": {
+    "message": "Работает на chatgpt.com и chat.openai.com",
+    "description": "Подсказка в popup"
+  },
+  "contextMenuTitle": {
+    "message": "Очистить DOM узлы в чате (оставить $count$)",
+    "description": "Пункт контекстного меню",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "errNoActiveTab": {
+    "message": "Не нашёл активную вкладку.",
+    "description": "Ошибка background при отсутствии активной вкладки"
+  },
+  "errExecuteScriptNoResult": {
+    "message": "executeScript не вернул результат.",
+    "description": "Ошибка background когда executeScript не вернул результат"
+  },
+  "inpageButtonText": {
+    "message": "Разгрузить чат",
+    "description": "Текст кнопки, встраиваемой в UI ChatGPT"
+  },
+  "inpageToastCleanupSummary": {
+    "message": "Разгрузка чата: удалено $removed$ из $total$, оставлено $kept$",
+    "description": "Тост после чистки",
+    "placeholders": {
+      "removed": { "content": "$1", "example": "10" },
+      "total": { "content": "$2", "example": "30" },
+      "kept": { "content": "$3", "example": "4" }
+    }
+  },
+  "inpageAriaLabel": {
+    "message": "Разгрузить чат (удалить старые сообщения из DOM, оставить $count$)",
+    "description": "ARIA label/title для кнопки",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "inpageFallbackButtonText": {
+    "message": "Разгрузить чат (оставить $count$)",
+    "description": "Fallback текст кнопки (без SVG)",
+    "placeholders": {
+      "count": { "content": "$1", "example": "4" }
+    }
+  },
+  "inpageToastRestored": {
+    "message": "Восстановлено $count$ сообщений",
+    "description": "Тост после восстановления",
+    "placeholders": {
+      "count": { "content": "$1", "example": "8" }
+    }
+  },
+  "inpageToastNoSavedMessages": {
+    "message": "Больше нет сохранённых сообщений",
+    "description": "Тост когда нечего восстанавливать"
+  },
+  "inpageToastBottom": {
+    "message": "Доскроллил до самого низа сообщений",
+    "description": "Тост на нижней границе"
+  }
+}
+

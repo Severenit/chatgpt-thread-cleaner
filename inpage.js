@@ -1,24 +1,24 @@
 (() => {
   const DEFAULT_KEEP_LAST = 4;
   const STORAGE_KEY_KEEP_LAST = "keepLast";
+  const STORAGE_KEY_LANG_OVERRIDE = "langOverride"; // "auto" | "en" | "ru"
   const BTN_ATTR = "data-chatgpt-dom-cleaner-btn";
   const ICON_HREF = "/cdn/assets/sprites-core-k5zux585.svg#a5ec30";
-  const BUTTON_TEXT = "Разгрузить чат";
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
-  /** Порог в пикселях для определения "у края". */
+  /** Threshold (px) to consider the user "at an edge". */
   const SCROLL_EDGE_PX = 12;
-  /** Сколько сообщений восстанавливать за один батч. */
+  /** How many messages to restore per batch. */
   const RESTORE_BATCH_SIZE = 8;
-  /** Максимум восстановлений за один заход к верху. */
+  /** Max restore batches per reaching the top edge. */
   const RESTORE_MAX_PER_EDGE = 2;
-  /** Лимит истории удалённых сообщений на диалог (по количеству записей). */
+  /** Per-conversation removed-messages history limit (by number of records). */
   const MAX_REMOVED_CACHE = 500;
-  /** Имя базы IndexedDB. */
+  /** IndexedDB database name. */
   const IDB_NAME = "chatgpt-dom-cleaner";
-  /** Версия базы IndexedDB (для миграций схемы). */
+  /** IndexedDB version (for schema migrations). */
   const IDB_VERSION = 2;
-  /** Название objectStore в IndexedDB. */
+  /** IndexedDB objectStore name. */
   const IDB_STORE = "removedMessages";
   let keepLast = DEFAULT_KEEP_LAST;
   let scrollWatcherBound = false;
@@ -31,17 +31,95 @@
   let bootScheduled = false;
   const preventScroll = (e) => e.preventDefault();
 
+  /** @type {null | "auto" | "en" | "ru"} */
+  let langOverride = null;
+  /** @type {Record<string, any> | null} */
+  let localeMessages = null;
+  const LOCALE_CACHE = new Map(); // locale -> messages.json object
+
+  function normalizeLangOverride(v) {
+    if (v === "en" || v === "ru" || v === "auto") return v;
+    return "auto";
+  }
+
+  function normalizeSubstitutions(substitutions) {
+    if (substitutions == null) return [];
+    if (Array.isArray(substitutions)) return substitutions.map(String);
+    return [String(substitutions)];
+  }
+
+  function formatFromLocaleEntry(entry, substitutions) {
+    if (!entry?.message) return "";
+    const subs = normalizeSubstitutions(substitutions);
+    if (!entry.placeholders) return String(entry.message);
+
+    const byName = {};
+    for (const [name, def] of Object.entries(entry.placeholders)) {
+      const content = String(def?.content || "");
+      // Chrome i18n placeholder "content" is typically "$1" (no trailing $).
+      const m = content.match(/^\$(\d+)\$?$/);
+      const idx = m ? Number(m[1]) - 1 : -1;
+      byName[name] = idx >= 0 ? String(subs[idx] ?? "") : "";
+    }
+
+    return String(entry.message).replace(/\$([a-zA-Z0-9_]+)\$/g, (_m, name) =>
+      Object.prototype.hasOwnProperty.call(byName, name) ? byName[name] : ""
+    );
+  }
+
+  async function loadLocaleMessages(locale) {
+    if (!locale || locale === "auto") return null;
+    if (LOCALE_CACHE.has(locale)) return LOCALE_CACHE.get(locale);
+
+    // Content scripts are subject to the page origin/CORS when fetching extension URLs.
+    // Load via the extension service worker instead.
+    const res = await chrome.runtime.sendMessage({ type: "GET_LOCALE_MESSAGES", locale });
+    if (!res?.ok) throw new Error(res?.error || `Failed to load locale ${locale}`);
+    const json = res.messages;
+    if (!json) throw new Error(`No messages for locale ${locale}`);
+    LOCALE_CACHE.set(locale, json);
+    return json;
+  }
+
+  async function syncLangOverrideFromStorage() {
+    try {
+      const raw = await chrome.storage.sync.get([STORAGE_KEY_LANG_OVERRIDE]);
+      langOverride = normalizeLangOverride(raw?.[STORAGE_KEY_LANG_OVERRIDE]);
+      localeMessages = await loadLocaleMessages(langOverride);
+    } catch {
+      langOverride = "auto";
+      localeMessages = null;
+    }
+  }
+
+  function t(messageName, substitutions) {
+    if (langOverride && langOverride !== "auto" && localeMessages) {
+      const entry = localeMessages[messageName];
+      const formatted = formatFromLocaleEntry(entry, substitutions);
+      if (formatted) return formatted;
+    }
+
+    try {
+      const msg = chrome?.i18n?.getMessage?.(messageName, substitutions);
+      return msg || "";
+    } catch {
+      return "";
+    }
+  }
+
+  const getButtonText = () => t("inpageButtonText") || "Lighten chat";
+
   /**
-   * Возвращает список DOM-узлов сообщений текущего диалога.
+   * Returns the list of message DOM nodes for the current conversation.
    *
-   * Сначала пробует более стабильный селектор ChatGPT:
+   * First, it tries a more stable ChatGPT selector:
    * `article[data-testid^="conversation-turn"]`.
-   * Если разметка изменилась — fallback на `article`.
+   * If markup changes, it falls back to `article`.
    *
-   * Важно: поиск ограничен `main`, чтобы случайно не затронуть `article`
-   * вне области диалога.
+   * Important: search is scoped to `main` to avoid accidentally targeting `article`
+   * outside the conversation area.
    *
-   * @returns {HTMLElement[]} Список `article` (по DOM-порядку).
+   * @returns {HTMLElement[]} List of `article` elements (DOM order).
    */
   function getChatArticles() {
     const root = document.querySelector("main") ?? document.body;
@@ -52,10 +130,10 @@
   }
 
   /**
-   * Чистит DOM: удаляет старые сообщения, оставляя последние `keepLast`.
+   * Cleans the DOM: removes old messages, keeping the last `keepLast`.
    *
-   * @param {number} keepLast - Сколько последних сообщений оставить.
-   * @returns {{total:number, removed:number, kept:number}} Счётчики до/после.
+   * @param {number} keepLast - How many last messages to keep.
+   * @returns {{total:number, removed:number, kept:number}} Counters before/after.
    */
   function cleanChatDom(keepLastArg) {
     const keep = sanitizeKeepLast(keepLastArg);
@@ -72,23 +150,26 @@
   }
 
   /**
-   * Запускает очистку и показывает toast с результатом.
+   * Runs cleanup and shows a toast with the result.
    *
-   * Сайд-эффект: удаляет DOM-узлы сообщений.
+   * Side effect: removes message DOM nodes.
    */
   function runAndToast() {
     const { total, removed, kept } = cleanChatDom(keepLast);
-    toast(`Разгрузка чата: удалено ${removed} из ${total}, оставлено ${kept}`);
-    // После удаления DOM не считаем это пользовательским скроллом.
+    toast(
+      t("inpageToastCleanupSummary", [String(removed), String(total), String(kept)]) ||
+        `Chat cleanup: removed ${removed} of ${total}, kept ${kept}`
+    );
+    // After DOM removal, don't treat it as a user scroll.
     hasUserScrolled = false;
     lastEdge = null;
   }
 
   /**
-   * Показывает “модалку-тост” в правом нижнем углу.
-   * Повторный вызов заменяет предыдущий toast (чтобы не спамить).
+   * Shows a "modal toast" in the bottom-right corner.
+   * Subsequent calls replace the previous toast (avoid spamming).
    *
-   * @param {string} text - Текст сообщения.
+   * @param {string} text - Message text.
    */
   function toast(text) {
     const prev = document.getElementById(TOAST_ID);
@@ -114,7 +195,7 @@
     el.style.transition = "opacity 120ms ease, transform 120ms ease";
     document.documentElement.appendChild(el);
 
-    // next tick — показать
+    // next tick — show
     queueMicrotask(() => {
       el.style.opacity = "1";
       el.style.transform = "translateY(0)";
@@ -128,7 +209,7 @@
   }
 
   /**
-   * Возвращает корневой скролл-элемент документа.
+   * Returns the document scroll root element.
    *
    * @returns {HTMLElement}
    */
@@ -137,15 +218,14 @@
   }
 
   /**
-   * Уникальный ключ диалога (по pathname).
+   * Returns a unique conversation key (by pathname).
    *
    * @returns {string}
    */
-  /** Возвращает ключ текущего диалога (по pathname). */
   const getConversationKey = () => `${location.pathname}`;
 
   /**
-   * Открывает IndexedDB и гарантирует наличие индексов.
+   * Opens IndexedDB and ensures required indexes exist.
    *
    * @returns {Promise<IDBDatabase>}
    */
@@ -186,7 +266,7 @@
   });
 
   /**
-   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
+   * Trims per-conversation history down to MAX_REMOVED_CACHE.
    *
    * @param {IDBDatabase} db
    * @param {string} conversationKey
@@ -226,7 +306,7 @@
   };
 
   /**
-   * Добавляет пачку удалённых сообщений в IndexedDB.
+   * Appends a batch of removed messages to IndexedDB.
    *
    * @param {string[]} htmlList
    * @returns {Promise<void>}
@@ -255,7 +335,7 @@
   };
 
   /**
-   * Забирает последние N удалённых сообщений и удаляет их из IndexedDB.
+   * Takes the latest N removed messages and deletes them from IndexedDB.
    *
    * @param {number} count
    * @returns {Promise<string[]>}
@@ -292,10 +372,10 @@
   };
 
   /**
-   * Восстанавливает ранее удалённые сообщения в начало чата.
+   * Restores previously removed messages to the top of the chat.
    *
    * @param {number} count
-   * @returns {Promise<number>} Сколько реально восстановили.
+   * @returns {Promise<number>} How many were actually restored.
    */
   const restoreMessagesAtTop = async (count) => {
     if (restoreInProgress) return 0;
@@ -327,7 +407,7 @@
   };
 
   /**
-   * Находит наиболее вероятный скролл-контейнер чата.
+   * Finds the most likely chat scroll container.
    *
    * @returns {HTMLElement}
    */
@@ -356,7 +436,7 @@
   }
 
   /**
-   * Проверяет достижение верхней/нижней границы и триггерит действия.
+   * Checks whether the user reached top/bottom edge and triggers actions.
    *
    * @param {HTMLElement} target
    * @returns {void}
@@ -378,7 +458,7 @@
             const restored = await restoreMessagesAtTop(RESTORE_BATCH_SIZE);
             if (restored <= 0) break;
             totalRestored += restored;
-            // если после добавления всё ещё у самого верха — продолжаем
+            // if still at the very top after inserting — continue
             const root = scrollTarget ?? getScrollRoot();
             if (root.scrollTop > SCROLL_EDGE_PX) break;
           }
@@ -389,13 +469,9 @@
               root.scrollTop = Math.max(0, root.scrollTop + 12);
               lastEdge = null;
             });
-            console.log(
-              `[chatgpt-dom-cleaner] Восстановлено ${totalRestored} сообщений.`
-            );
-            toast(`Восстановлено ${totalRestored} сообщений`);
+            toast(t("inpageToastRestored", [String(totalRestored)]) || `Restored ${totalRestored} messages`);
           } else {
-            console.log("[chatgpt-dom-cleaner] Больше нет сохранённых сообщений.");
-            toast("Больше нет сохранённых сообщений");
+            toast(t("inpageToastNoSavedMessages") || "No saved messages left");
           }
         } finally {
           window.removeEventListener("wheel", preventScroll);
@@ -407,8 +483,7 @@
 
     if (atBottom && lastEdge !== "bottom") {
       lastEdge = "bottom";
-      console.log("[chatgpt-dom-cleaner] Доскроллил до самого низа сообщений.");
-      toast("Доскроллил до самого низа сообщений");
+      toast(t("inpageToastBottom") || "Scrolled to the very bottom");
       return;
     }
 
@@ -418,7 +493,7 @@
   }
 
   /**
-   * Включает наблюдение за скроллом чата (однократно/с ребайндом).
+   * Enables chat scroll edge watching (one-time/bind-and-rebind).
    *
    * @returns {void}
    */
@@ -458,10 +533,10 @@
   }
 
   /**
-   * Встраивает кнопку “Разгрузить чат” в хедер ChatGPT (рядом с “Поделиться”),
-   * либо обновляет видимость уже существующей.
+   * Mounts the "Lighten chat" button into the ChatGPT header (near "Share"),
+   * or updates visibility of the existing one.
    *
-   * Кнопка показывается только если сообщений > keepLast.
+   * The button is shown only if message count > keepLast.
    */
   function ensureHeaderButton() {
     const header =
@@ -474,10 +549,12 @@
     const existing = header.querySelector(`[${BTN_ATTR}="1"]`);
     if (existing) {
       updateHeaderButtonVisibility(existing);
+      updateHeaderButtonText(existing);
+      updateHeaderButtonLabel(existing);
       return;
     }
 
-    // Пытаемся прикрепиться рядом с кнопкой "Поделиться"/"Share". Если не нашли — просто в конец header.
+    // Try to mount near the "Share" button. If not found — append to the end of the header.
     const shareBtn = findShareButton(header);
     const mountPoint = shareBtn?.parentElement ?? header;
 
@@ -493,7 +570,7 @@
       runAndToast();
     });
 
-    // Вставляем после share, если он есть, иначе в конец.
+    // Insert before Share if present; otherwise append to the end.
     if (shareBtn && shareBtn.parentElement) {
       shareBtn.insertAdjacentElement("beforebegin", btn);
     } else {
@@ -501,57 +578,87 @@
     }
 
     updateHeaderButtonVisibility(btn);
+    updateHeaderButtonText(btn);
     updateHeaderButtonLabel(btn);
   }
 
   /**
-   * Проверяет, безопасно ли встраивать кнопку в header
-   * (не лезем в SSR/гидратацию React).
+   * Checks whether it's safe to mount into the header
+   * (avoid interfering with React SSR/hydration).
    *
    * @param {HTMLElement} header
    * @returns {boolean}
    */
   function canMountIntoHeader(header) {
     if (document.readyState !== "complete") return false;
-    // Ждём, когда в хедере появятся реальные элементы управления.
+    // Wait until real controls appear in the header.
     if (!header.querySelector("button")) return false;
     return true;
   }
 
   /**
-   * Скрывает кнопку на новом/коротком диалоге (когда чистить нечего).
+   * Hides the button in a new/short conversation (when there's nothing to clean).
    *
-   * @param {HTMLElement} btn - Кнопка, которую нужно показать/скрыть.
+   * @param {HTMLElement} btn - Button to show/hide.
    */
   function updateHeaderButtonVisibility(btn) {
-    // В новом чате/когда сообщений мало — кнопка не нужна.
+    // In a new chat / when messages are few — the button isn't needed.
     const total = getChatArticles().length;
     const shouldShow = total > keepLast;
     btn.style.display = shouldShow ? "" : "none";
   }
 
   /**
-   * Обновляет label/tooltip у кнопки (поскольку keepLast настраиваемый).
+   * Updates button label/tooltip (since keepLast is configurable).
    *
    * @param {HTMLButtonElement} btn
    */
   function updateHeaderButtonLabel(btn) {
-    const aria = `Разгрузить чат (удалить старые сообщения из DOM, оставить ${keepLast})`;
+    const aria =
+      t("inpageAriaLabel", [String(keepLast)]) ||
+      `Lighten chat (remove old messages from the DOM, keep ${keepLast})`;
     btn.setAttribute("aria-label", aria);
     btn.setAttribute("title", aria);
 
-    // Если это наш fallback (без ChatGPT разметки) — обновим текст.
+    // If this is our fallback (no ChatGPT SVG structure) — update the text.
     if (!btn.querySelector("svg")) {
-      btn.textContent = `Разгрузить чат (оставить ${keepLast})`;
+      btn.textContent =
+        t("inpageFallbackButtonText", [String(keepLast)]) || `Lighten chat (keep ${keepLast})`;
     }
   }
 
   /**
-   * Ищет кнопку “Поделиться/Share” в переданном scope.
-   * Используется как “якорь” для вставки нашей кнопки.
+   * Updates the visible button text (both SVG + non-SVG variants).
    *
-   * @param {ParentNode} scope - Контейнер, где ищем кнопку.
-   * @returns {HTMLButtonElement|null} Кнопка Share, если найдена.
+   * @param {HTMLButtonElement} btn
+   * @returns {void}
+   */
+  function updateHeaderButtonText(btn) {
+    const flex = btn.querySelector("div");
+    if (!flex) return;
+
+    const text = getButtonText();
+    const svg = flex.querySelector("svg");
+    if (svg) {
+      // Ensure the icon stays as our sprite.
+      const use = svg.querySelector("use");
+      if (use) {
+        use.setAttribute("href", ICON_HREF);
+        use.setAttributeNS("http://www.w3.org/1999/xlink", "href", ICON_HREF);
+      }
+      flex.innerHTML = `${svg.outerHTML}${text}`;
+      return;
+    }
+
+    flex.textContent = text;
+  }
+
+  /**
+   * Finds the "Share" button within the provided scope.
+   * Used as an "anchor" to insert our button next to it.
+   *
+   * @param {ParentNode} scope - Container to search in.
+   * @returns {HTMLButtonElement|null} The Share button if found.
    */
   function findShareButton(scope) {
     const candidates = Array.from(scope.querySelectorAll("button"));
@@ -565,57 +672,58 @@
   }
 
   /**
-   * Делает кнопку, максимально похожую на “Поделиться”: клонирует DOM,
-   * подменяет иконку и текст, убирает специфичные атрибуты.
+   * Builds a button that closely matches "Share": clones DOM, swaps icon and text,
+   * and removes Share-specific attributes.
    *
-   * @param {HTMLButtonElement} shareBtn - Оригинальная кнопка Share.
-   * @returns {HTMLButtonElement} Новая кнопка “Разгрузить чат”.
+   * @param {HTMLButtonElement} shareBtn - Original Share button.
+   * @returns {HTMLButtonElement} New "Lighten chat" button.
    */
   function cloneShareButtonAsCleaner(shareBtn) {
     const btn = shareBtn.cloneNode(true);
 
-    // Снимаем специфичные для Share атрибуты, чтобы не ломать логику страницы.
+    // Remove Share-specific attributes to avoid breaking page logic.
     btn.removeAttribute("data-testid");
     btn.removeAttribute("style"); // view-transition-name
-    // aria/title выставляем динамически в updateHeaderButtonLabel()
+    // aria/title are set dynamically in updateHeaderButtonLabel()
 
-    // Небольшой отступ от Share влево.
+    // Small left gap from Share.
     btn.classList.add("mr-2");
 
-    // Меняем только текст, сохраняя SVG и flex-структуру.
+    // Change only the text, preserving the SVG + flex structure.
     const flex = btn.querySelector("div");
     if (flex) {
       const svg = flex.querySelector("svg");
       if (svg) {
-        // Подменяем иконку на нужный sprite id.
+        // Swap the icon to the target sprite id.
         const use = svg.querySelector("use");
         if (use) {
           use.setAttribute("href", ICON_HREF);
-          // Safari/старый движок: на всякий случай.
+          // Safari/older engines: just in case.
           use.setAttributeNS("http://www.w3.org/1999/xlink", "href", ICON_HREF);
         }
 
-        flex.innerHTML = `${svg.outerHTML}${BUTTON_TEXT}`;
+        flex.innerHTML = `${svg.outerHTML}${getButtonText()}`;
       } else {
-        flex.textContent = BUTTON_TEXT;
+        flex.textContent = getButtonText();
       }
     } else {
-      btn.textContent = BUTTON_TEXT;
+      btn.textContent = getButtonText();
     }
 
     return btn;
   }
 
   /**
-   * Fallback-кнопка, если не удалось найти/клонировать Share.
-   * Даёт базовую функциональность без зависимости от классов ChatGPT UI.
+   * Fallback button if we couldn't find/clone Share.
+   * Provides basic functionality without depending on ChatGPT UI classes.
    *
-   * @returns {HTMLButtonElement} Кнопка “Разгрузить чат (оставить 4)”.
+   * @returns {HTMLButtonElement} "Lighten chat (keep N)" button.
    */
   function createFallbackCleanerButton() {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = `Разгрузить чат (оставить ${keepLast})`;
+    btn.textContent =
+      t("inpageFallbackButtonText", [String(keepLast)]) || `Lighten chat (keep ${keepLast})`;
     btn.style.marginLeft = "8px";
     btn.style.padding = "6px 10px";
     btn.style.borderRadius = "10px";
@@ -629,8 +737,8 @@
   }
 
   /**
-   * Единая точка “обновления” UI-инъекции:
-   * - кнопка в хедере рядом с “Поделиться/Share”
+   * Single refresh entry point for UI injection:
+   * - header button near "Share"
    */
   function boot() {
     ensureHeaderButton();
@@ -638,10 +746,9 @@
   }
 
   /**
-   * Троттлит `boot()`: не чаще 1 раза за frame.
+   * Throttles `boot()` to at most once per frame.
    *
-   * MutationObserver на ChatGPT может стрелять очень часто, поэтому запускаем
-   * пере-инициализацию только через rAF.
+   * ChatGPT's MutationObserver can fire very frequently, so we only re-init via rAF.
    *
    * @returns {void}
    */
@@ -655,7 +762,7 @@
   }
 
   /**
-   * Нормализует keepLast: число, целое, диапазон [1..99].
+   * Normalizes `keepLast`: finite number, integer, range [1..99].
    *
    * @param {unknown} v
    * @returns {number}
@@ -667,7 +774,7 @@
   }
 
   /**
-   * Подтягивает keepLast из chrome.storage.sync и обновляет UI/логику.
+   * Pulls `keepLast` from `chrome.storage.sync` and updates UI/logic.
    *
    * @returns {Promise<void>}
    */
@@ -681,13 +788,27 @@
     }
   }
 
-  // Первичный запуск + наблюдатель (React часто перерисовывает хедер/менюшки).
-  boot();
-  void syncKeepLastFromStorage();
+  // Initial boot + observer (React frequently re-renders header/menus).
+  void (async () => {
+    await syncLangOverrideFromStorage();
+    await syncKeepLastFromStorage();
+    boot();
+  })();
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "sync") return;
-    if (!changes?.[STORAGE_KEY_KEEP_LAST]) return;
-    keepLast = sanitizeKeepLast(changes[STORAGE_KEY_KEEP_LAST]?.newValue);
+    const keepChanged = Boolean(changes?.[STORAGE_KEY_KEEP_LAST]);
+    const langChanged = Boolean(changes?.[STORAGE_KEY_LANG_OVERRIDE]);
+    if (!keepChanged && !langChanged) return;
+
+    if (keepChanged) {
+      keepLast = sanitizeKeepLast(changes[STORAGE_KEY_KEEP_LAST]?.newValue);
+    }
+
+    if (langChanged) {
+      void syncLangOverrideFromStorage().then(() => scheduleBoot());
+      return;
+    }
+
     scheduleBoot();
   });
   const mo = new MutationObserver(() => scheduleBoot());

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,19 +8,26 @@
   </head>
   <body>
     <main class="wrap">
-      <h1 class="title">ChatGPT Thread Cleaner</h1>
+      <h1 class="title" data-i18n="popupTitle">ChatGPT Thread Cleaner</h1>
 
       <label class="field">
-        <span class="fieldLabel">Оставлять сообщений</span>
+        <span class="fieldLabel" data-i18n="languageLabel">Language</span>
+        <select id="lang" class="input">
+          <option value="auto" data-i18n="languageAuto">Auto</option>
+          <option value="en" data-i18n="languageEnglish">English</option>
+          <option value="ru" data-i18n="languageRussian">Russian</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="fieldLabel" data-i18n="keepLastLabel">Оставлять сообщений</span>
         <input id="keepLast" class="input" type="number" min="1" max="99" step="1" />
       </label>
 
-      <button id="clean" class="btn" type="button">
-        Очистить DOM
-      </button>
+      <button id="clean" class="btn" type="button" data-i18n="cleanButton">Очистить DOM</button>
 
       <p id="status" class="status" aria-live="polite"></p>
-      <p class="hint">Работает на chatgpt.com и chat.openai.com</p>
+      <p class="hint" data-i18n="hintDomains">Работает на chatgpt.com и chat.openai.com</p>
     </main>
 
     <script src="popup.js"></script>

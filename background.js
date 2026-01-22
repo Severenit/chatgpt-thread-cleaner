@@ -1,18 +1,96 @@
 const MENU_ID = "chatgpt-dom-cleaner:clean";
 const KEEP_LAST_DEFAULT = 4;
 const STORAGE_KEY_KEEP_LAST = "keepLast";
+const STORAGE_KEY_LANG_OVERRIDE = "langOverride"; // "auto" | "en" | "ru"
+
+/** @type {null | "auto" | "en" | "ru"} */
+let langOverride = null;
+/** @type {Record<string, any> | null} */
+let localeMessages = null;
+const LOCALE_CACHE = new Map(); // locale -> messages.json object
+
+function normalizeLangOverride(v) {
+  if (v === "en" || v === "ru" || v === "auto") return v;
+  return "auto";
+}
+
+function normalizeSubstitutions(substitutions) {
+  if (substitutions == null) return [];
+  if (Array.isArray(substitutions)) return substitutions.map(String);
+  return [String(substitutions)];
+}
+
+function formatFromLocaleEntry(entry, substitutions) {
+  if (!entry?.message) return "";
+  const subs = normalizeSubstitutions(substitutions);
+  if (!entry.placeholders) return String(entry.message);
+
+  const byName = {};
+  for (const [name, def] of Object.entries(entry.placeholders)) {
+    const content = String(def?.content || "");
+    // Chrome i18n placeholder "content" is typically "$1" (no trailing $).
+    const m = content.match(/^\$(\d+)\$?$/);
+    const idx = m ? Number(m[1]) - 1 : -1;
+    byName[name] = idx >= 0 ? String(subs[idx] ?? "") : "";
+  }
+
+  return String(entry.message).replace(/\$([a-zA-Z0-9_]+)\$/g, (_m, name) =>
+    Object.prototype.hasOwnProperty.call(byName, name) ? byName[name] : ""
+  );
+}
+
+async function loadLocaleMessages(locale) {
+  if (!locale || locale === "auto") return null;
+  if (LOCALE_CACHE.has(locale)) return LOCALE_CACHE.get(locale);
+  const url = chrome.runtime.getURL(`_locales/${locale}/messages.json`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load locale ${locale}`);
+  const json = await res.json();
+  LOCALE_CACHE.set(locale, json);
+  return json;
+}
+
+async function syncLangOverrideFromStorage() {
+  try {
+    const raw = await chrome.storage.sync.get([STORAGE_KEY_LANG_OVERRIDE]);
+    langOverride = normalizeLangOverride(raw?.[STORAGE_KEY_LANG_OVERRIDE]);
+    localeMessages = await loadLocaleMessages(langOverride);
+  } catch {
+    langOverride = "auto";
+    localeMessages = null;
+  }
+}
+
+function t(messageName, substitutions) {
+  if (langOverride && langOverride !== "auto" && localeMessages) {
+    const entry = localeMessages[messageName];
+    const formatted = formatFromLocaleEntry(entry, substitutions);
+    if (formatted) return formatted;
+  }
+
+  try {
+    const msg = chrome?.i18n?.getMessage?.(messageName, substitutions);
+    return msg || "";
+  } catch {
+    return "";
+  }
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: MENU_ID,
-      title: `Очистить DOM узлы в чате (оставить ${KEEP_LAST_DEFAULT})`,
-      contexts: ["page", "action"],
-      documentUrlPatterns: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
-    });
+    void (async () => {
+      await syncLangOverrideFromStorage();
+      chrome.contextMenus.create({
+        id: MENU_ID,
+        title: t("contextMenuTitle", [String(KEEP_LAST_DEFAULT)]) ||
+          `Clean chat DOM nodes (keep ${KEEP_LAST_DEFAULT})`,
+        contexts: ["page", "action"],
+        documentUrlPatterns: ["https://chatgpt.com/*", "https://chat.openai.com/*"]
+      });
 
-    // Best-effort: подтянуть значение из storage и обновить label.
-    void syncContextMenuTitleFromStorage();
+      // Best-effort: pull the value from storage and update the label.
+      void syncContextMenuTitleFromStorage();
+    })();
   });
 });
 
@@ -26,7 +104,25 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (!msg || msg.type !== "CLEAN_CHAT_DOM") return;
+  if (!msg) return;
+
+  if (msg.type === "GET_LOCALE_MESSAGES") {
+    (async () => {
+      try {
+        const locale = normalizeLangOverride(msg.locale);
+        const messages = await loadLocaleMessages(locale);
+        sendResponse({ ok: true, locale, messages });
+      } catch (err) {
+        sendResponse({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type !== "CLEAN_CHAT_DOM") return;
 
   (async () => {
     try {
@@ -49,12 +145,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "sync") return;
-  if (!changes?.[STORAGE_KEY_KEEP_LAST]) return;
-  void syncContextMenuTitleFromStorage();
+  const keepChanged = Boolean(changes?.[STORAGE_KEY_KEEP_LAST]);
+  const langChanged = Boolean(changes?.[STORAGE_KEY_LANG_OVERRIDE]);
+  if (!keepChanged && !langChanged) return;
+
+  void (async () => {
+    if (langChanged) await syncLangOverrideFromStorage();
+    await syncContextMenuTitleFromStorage();
+  })();
 });
 
 /**
- * Читает keepLast из `chrome.storage.sync` с нормализацией.
+ * Reads `keepLast` from `chrome.storage.sync` and normalizes it.
  *
  * @returns {Promise<number>}
  */
@@ -64,7 +166,7 @@ async function getKeepLastFromStorage() {
 }
 
 /**
- * Обновляет title у пункта контекстного меню под текущее значение keepLast.
+ * Updates the context menu item's title based on the current `keepLast`.
  *
  * @returns {Promise<void>}
  */
@@ -72,7 +174,7 @@ async function syncContextMenuTitleFromStorage() {
   try {
     const keepLast = await getKeepLastFromStorage();
     chrome.contextMenus.update(MENU_ID, {
-      title: `Очистить DOM узлы в чате (оставить ${keepLast})`
+      title: t("contextMenuTitle", [String(keepLast)]) || `Clean chat DOM nodes (keep ${keepLast})`
     });
   } catch {
     // ignore
@@ -80,7 +182,7 @@ async function syncContextMenuTitleFromStorage() {
 }
 
 /**
- * Нормализует keepLast: число, целое, диапазон [1..99].
+ * Normalizes `keepLast`: finite number, integer, range [1..99].
  *
  * @param {unknown} v
  * @returns {number}
@@ -92,29 +194,29 @@ function sanitizeKeepLast(v) {
 }
 
 /**
- * Возвращает `tabId` активной вкладки в текущем окне.
+ * Returns the `tabId` of the active tab in the current window.
  *
- * Используется сервис-воркером, когда popup отправляет команду очистки.
+ * Used by the service worker when the popup sends a cleanup command.
  *
- * @returns {Promise<number>} ID активной вкладки.
- * @throws {Error} Если активную вкладку определить не удалось (нет `tab.id`).
+ * @returns {Promise<number>} Active tab ID.
+ * @throws {Error} If the active tab cannot be determined (no `tab.id`).
  */
 async function getActiveTabId() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id) throw new Error("Не нашёл активную вкладку.");
+  if (!tab?.id) throw new Error(t("errNoActiveTab") || "Couldn't find the active tab.");
   return tab.id;
 }
 
 /**
- * Запускает очистку DOM на вкладке через `chrome.scripting.executeScript`.
+ * Runs DOM cleanup on a tab via `chrome.scripting.executeScript`.
  *
- * Важно: инжект происходит в контекст страницы. Функция `cleanChatDom` должна быть
- * самодостаточной (без замыканий на переменные service worker).
+ * Important: injection runs in the page context. `cleanChatDom` must be self-contained
+ * (no closures over service-worker variables).
  *
- * @param {number} tabId - ID вкладки, на которой выполняем очистку.
- * @param {number} keepLast - Сколько последних сообщений оставить (округляется вниз, минимум 0).
- * @returns {Promise<{total:number, removed:number, kept:number}>} Результат очистки.
- * @throws {Error} Если `executeScript` не вернул результат.
+ * @param {number} tabId - Target tab ID.
+ * @param {number} keepLast - How many last messages to keep (floored, min 0).
+ * @returns {Promise<{total:number, removed:number, kept:number}>} Cleanup result.
+ * @throws {Error} If `executeScript` returns no result.
  */
 async function runCleanupOnTab(tabId, keepLast) {
   const keep = Math.max(0, Math.floor(keepLast));
@@ -126,30 +228,30 @@ async function runCleanupOnTab(tabId, keepLast) {
   });
 
   if (!Array.isArray(injected) || injected.length === 0) {
-    throw new Error("executeScript не вернул результат.");
+    throw new Error(t("errExecuteScriptNoResult") || "executeScript returned no result.");
   }
 
   return injected[0].result;
 }
 
 /**
- * Чистит DOM текущего диалога ChatGPT: удаляет старые узлы сообщений (`article`),
- * оставляя последние `keepLast`.
+ * Cleans the current ChatGPT conversation DOM: removes old message nodes (`article`),
+ * keeping the last `keepLast`.
  *
- * Скоуп ограничен `main`, чтобы не удалять `article` в других частях страницы.
+ * Scope is limited to `main` to avoid removing `article` elements in other parts of the page.
  *
- * @param {number} keepLast - Сколько последних сообщений оставить.
- * @returns {{total:number, removed:number, kept:number}} Счётчики до/после.
+ * @param {number} keepLast - How many last messages to keep.
+ * @returns {{total:number, removed:number, kept:number}} Counters before/after.
  */
 function cleanChatDom(keepLast) {
   const keep = Math.max(0, Math.floor(Number(keepLast)));
-  /** Имя базы IndexedDB. */
+  /** IndexedDB database name. */
   const IDB_NAME = "chatgpt-dom-cleaner";
-  /** Версия базы IndexedDB (для миграций схемы). */
+  /** IndexedDB version (for schema migrations). */
   const IDB_VERSION = 2;
-  /** Название objectStore в IndexedDB. */
+  /** IndexedDB objectStore name. */
   const IDB_STORE = "removedMessages";
-  /** Лимит истории удалённых сообщений на диалог (по количеству записей). */
+  /** Per-conversation removed-messages history limit (by number of records). */
   const MAX_REMOVED_CACHE = 500;
 
   const root = document.querySelector("main") ?? document.body;
@@ -158,7 +260,7 @@ function cleanChatDom(keepLast) {
     root.querySelectorAll('article[data-testid^="conversation-turn"]')
   );
 
-  // Fallback на случай изменений разметки. Держим скоуп внутри main, чтобы не снести всё на странице.
+  // Fallback for markup changes. Keep the scope inside `main` to avoid wiping the whole page.
   const nodes = primary.length ? primary : Array.from(root.querySelectorAll("article"));
 
   const total = nodes.length;
@@ -170,9 +272,9 @@ function cleanChatDom(keepLast) {
   const removedHtml = toRemove.map((el) => el.outerHTML);
   for (const el of toRemove) el.remove();
 
-  // Сохраняем удалённые сообщения в IndexedDB (на уровне страницы).
+  // Persist removed messages in IndexedDB (page context).
   /**
-   * Открывает IndexedDB и гарантирует наличие индексов.
+   * Opens IndexedDB and ensures required indexes exist.
    *
    * @returns {Promise<IDBDatabase>}
    */
@@ -213,7 +315,7 @@ function cleanChatDom(keepLast) {
   });
 
   /**
-   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
+   * Trims per-conversation history down to MAX_REMOVED_CACHE.
    *
    * @param {IDBDatabase} db
    * @param {string} conversationKey
@@ -253,7 +355,7 @@ function cleanChatDom(keepLast) {
   };
 
   /**
-   * Добавляет пачку удалённых сообщений в IndexedDB.
+   * Appends a batch of removed messages to IndexedDB.
    *
    * @param {string[]} htmlList
    * @returns {Promise<void>}

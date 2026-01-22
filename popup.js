@@ -1,27 +1,117 @@
 const DEFAULT_KEEP_LAST = 4;
 const STORAGE_KEY_KEEP_LAST = "keepLast";
+const STORAGE_KEY_LANG_OVERRIDE = "langOverride"; // "auto" | "en" | "ru"
 
 const cleanBtn = document.getElementById("clean");
 const statusEl = document.getElementById("status");
 const keepLastInput = document.getElementById("keepLast");
+const langSelect = document.getElementById("lang");
+
+/** @type {null | "auto" | "en" | "ru"} */
+let langOverride = null;
+/** @type {Record<string, any> | null} */
+let localeMessages = null;
+
+const LOCALE_CACHE = new Map(); // locale -> messages.json object
+
+function normalizeLangOverride(v) {
+  if (v === "en" || v === "ru" || v === "auto") return v;
+  return "auto";
+}
+
+function normalizeSubstitutions(substitutions) {
+  if (substitutions == null) return [];
+  if (Array.isArray(substitutions)) return substitutions.map(String);
+  return [String(substitutions)];
+}
+
+function formatFromLocaleEntry(entry, substitutions) {
+  if (!entry?.message) return "";
+  const subs = normalizeSubstitutions(substitutions);
+  if (!entry.placeholders) return String(entry.message);
+
+  const byName = {};
+  for (const [name, def] of Object.entries(entry.placeholders)) {
+    const content = String(def?.content || "");
+    // Chrome i18n placeholder "content" is typically "$1" (no trailing $).
+    const m = content.match(/^\$(\d+)\$?$/);
+    const idx = m ? Number(m[1]) - 1 : -1;
+    byName[name] = idx >= 0 ? String(subs[idx] ?? "") : "";
+  }
+
+  return String(entry.message).replace(/\$([a-zA-Z0-9_]+)\$/g, (_m, name) =>
+    Object.prototype.hasOwnProperty.call(byName, name) ? byName[name] : ""
+  );
+}
+
+async function loadLocaleMessages(locale) {
+  if (!locale || locale === "auto") return null;
+  if (LOCALE_CACHE.has(locale)) return LOCALE_CACHE.get(locale);
+  const url = chrome.runtime.getURL(`_locales/${locale}/messages.json`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load locale ${locale}`);
+  const json = await res.json();
+  LOCALE_CACHE.set(locale, json);
+  return json;
+}
+
+function t(messageName, substitutions) {
+  if (langOverride && langOverride !== "auto" && localeMessages) {
+    const entry = localeMessages[messageName];
+    const formatted = formatFromLocaleEntry(entry, substitutions);
+    if (formatted) return formatted;
+  }
+
+  try {
+    const msg = chrome?.i18n?.getMessage?.(messageName, substitutions);
+    return msg || "";
+  } catch {
+    return "";
+  }
+}
+
+async function applyI18nToDom() {
+  const raw = await chrome.storage.sync.get([STORAGE_KEY_LANG_OVERRIDE]);
+  langOverride = normalizeLangOverride(raw?.[STORAGE_KEY_LANG_OVERRIDE]);
+  localeMessages = await loadLocaleMessages(langOverride);
+
+  const effectiveLang =
+    langOverride && langOverride !== "auto"
+      ? langOverride
+      : chrome?.i18n?.getUILanguage?.() || "en";
+
+  document.documentElement.lang = effectiveLang;
+  document.title = t("popupTitle") || document.title;
+
+  const nodes = document.querySelectorAll("[data-i18n]");
+  for (const el of nodes) {
+    const key = el.getAttribute("data-i18n");
+    if (!key) continue;
+    const msg = t(key);
+    if (msg) el.textContent = msg;
+  }
+}
 
 /**
- * Обновляет текст статуса в popup.
+ * Updates the status text in the popup.
  *
- * @param {string} text - Текст, который покажем пользователю.
+ * @param {string} text - The text shown to the user.
  */
 function setStatus(text) {
   statusEl.textContent = text;
 }
 
-// Best-effort: подтянуть typographic settings из активной вкладки ChatGPT, чтобы popup выглядел нативно.
+// Best-effort: inherit typography from the active ChatGPT tab so the popup looks native.
 applyFontFromActiveTab().catch(() => {});
 
-initSettings().catch(() => {});
+void (async () => {
+  await applyI18nToDom();
+  await initSettings();
+})().catch(() => {});
 
 cleanBtn.addEventListener("click", async () => {
   cleanBtn.disabled = true;
-  setStatus("Чищу...");
+  setStatus(t("statusCleaning") || "...");
 
   try {
     const keepLast = await getKeepLast();
@@ -31,28 +121,50 @@ cleanBtn.addEventListener("click", async () => {
     });
 
     if (!res?.ok) {
-      throw new Error(res?.error || "Неизвестная ошибка.");
+      throw new Error(res?.error || t("statusUnknownError") || "Unknown error.");
     }
 
     const { total, removed, kept } = res.result || {};
-    setStatus(`Удалено ${removed ?? "?"} из ${total ?? "?"}. Оставлено ${kept ?? "?"}.`);
+    setStatus(
+      t("statusRemovedSummary", [String(removed ?? "?"), String(total ?? "?"), String(kept ?? "?")]) ||
+        ""
+    );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    setStatus(`Ошибка: ${msg}`);
+    setStatus(t("statusErrorPrefix", [msg]) || msg);
   } finally {
     cleanBtn.disabled = false;
   }
 });
 
 /**
- * Инициализирует UI-настройку keepLast:
- * - читает значение из storage (или берёт default)
- * - обновляет input и подпись кнопки
- * - сохраняет изменения по input
+ * Initializes the `keepLast` UI setting:
+ * - reads from storage (or uses the default)
+ * - updates the input and the button label
+ * - persists changes on input change
  *
  * @returns {Promise<void>}
  */
 async function initSettings() {
+  // Language override
+  try {
+    const raw = await chrome.storage.sync.get([STORAGE_KEY_LANG_OVERRIDE]);
+    const v = normalizeLangOverride(raw?.[STORAGE_KEY_LANG_OVERRIDE]);
+    langSelect.value = v;
+  } catch {
+    langSelect.value = "auto";
+  }
+
+  langSelect.addEventListener("change", async () => {
+    const next = normalizeLangOverride(langSelect.value);
+    await chrome.storage.sync.set({ [STORAGE_KEY_LANG_OVERRIDE]: next });
+    // Re-apply i18n and refresh labels.
+    await applyI18nToDom();
+    const keepLast = sanitizeKeepLast(keepLastInput.value);
+    updateCleanButtonLabel(keepLast);
+    setStatus("");
+  });
+
   const keepLast = await getKeepLast();
   keepLastInput.value = String(keepLast);
   updateCleanButtonLabel(keepLast);
@@ -72,16 +184,16 @@ async function initSettings() {
 }
 
 /**
- * Обновляет текст кнопки запуска в popup.
+ * Updates the popup action button label.
  *
  * @param {number} keepLast
  */
 function updateCleanButtonLabel(keepLast) {
-  cleanBtn.textContent = `Очистить DOM (оставить ${keepLast})`;
+  cleanBtn.textContent = t("cleanButtonWithKeep", [String(keepLast)]) || cleanBtn.textContent;
 }
 
 /**
- * Читает keepLast из `chrome.storage.sync`.
+ * Reads `keepLast` from `chrome.storage.sync`.
  *
  * @returns {Promise<number>}
  */
@@ -91,7 +203,7 @@ async function getKeepLast() {
 }
 
 /**
- * Записывает keepLast в `chrome.storage.sync`.
+ * Writes `keepLast` to `chrome.storage.sync`.
  *
  * @param {number} keepLast
  * @returns {Promise<void>}
@@ -101,7 +213,7 @@ async function setKeepLast(keepLast) {
 }
 
 /**
- * Нормализует ввод пользователя.
+ * Normalizes user input.
  *
  * @param {unknown} v
  * @returns {number}
@@ -113,15 +225,14 @@ function sanitizeKeepLast(v) {
 }
 
 /**
- * Best-effort: подтягивает типографику (font-*) со страницы активной вкладки и
- * применяет её к popup через CSS variables (`--chatgpt-*`).
+ * Best-effort: fetches typography (font-*) from the active tab and applies it to the popup via
+ * CSS variables (`--chatgpt-*`).
  *
- * Это нужно, чтобы popup визуально “сливался” с текущей темой/шрифтами ChatGPT.
+ * This makes the popup visually blend with the current ChatGPT theme/fonts.
  *
- * Ограничения:
- * - Сработает только если активная вкладка позволяет `executeScript`
- *   (в нашем случае — на `chatgpt.com` / `chat.openai.com`).
- * - Если инжект невозможен/запрещён, функция просто молча завершается.
+ * Limitations:
+ * - Works only if the active tab allows `executeScript` (for us: `chatgpt.com` / `chat.openai.com`).
+ * - If injection is not possible/allowed, the function fails silently.
  *
  * @returns {Promise<void>}
  */
