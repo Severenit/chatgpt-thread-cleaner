@@ -11,7 +11,7 @@
   /** Сколько сообщений восстанавливать за один батч. */
   const RESTORE_BATCH_SIZE = 8;
   /** Максимум восстановлений за один заход к верху. */
-  const RESTORE_MAX_PER_EDGE = 500;
+  const RESTORE_MAX_PER_EDGE = 2;
   /** Лимит истории удалённых сообщений (null = без лимита). */
   const MAX_REMOVED_CACHE = null;
   /** Имя базы IndexedDB. */
@@ -28,6 +28,7 @@
   let scrollListener = null;
   let hasUserScrolled = false;
   let restoreInProgress = false;
+  const preventScroll = (e) => e.preventDefault();
 
   /**
    * Возвращает список DOM-узлов сообщений текущего диалога.
@@ -409,6 +410,9 @@
     if (atTop && lastEdge !== "top") {
       lastEdge = "top";
       void (async () => {
+        window.addEventListener("wheel", preventScroll, { passive: false });
+        window.addEventListener("touchmove", preventScroll, { passive: false });
+        try {
         let totalRestored = 0;
         while (totalRestored < RESTORE_MAX_PER_EDGE) {
           const restored = await restoreMessagesAtTop(RESTORE_BATCH_SIZE);
@@ -420,6 +424,11 @@
         }
 
         if (totalRestored > 0) {
+          const root = scrollTarget ?? getScrollRoot();
+          requestAnimationFrame(() => {
+            root.scrollTop = Math.max(0, root.scrollTop + 12);
+            lastEdge = null;
+          });
           console.log(
             `[chatgpt-dom-cleaner] Восстановлено ${totalRestored} сообщений.`
           );
@@ -427,6 +436,10 @@
         } else {
           console.log("[chatgpt-dom-cleaner] Больше нет сохранённых сообщений.");
           toast("Больше нет сохранённых сообщений");
+        }
+        } finally {
+          window.removeEventListener("wheel", preventScroll);
+          window.removeEventListener("touchmove", preventScroll);
         }
       })();
       return;
