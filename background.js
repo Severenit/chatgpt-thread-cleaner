@@ -143,6 +143,14 @@ async function runCleanupOnTab(tabId, keepLast) {
  */
 function cleanChatDom(keepLast) {
   const keep = Math.max(0, Math.floor(Number(keepLast)));
+  /** Имя базы IndexedDB. */
+  const IDB_NAME = "chatgpt-dom-cleaner";
+  /** Версия базы IndexedDB (для миграций схемы). */
+  const IDB_VERSION = 2;
+  /** Название objectStore в IndexedDB. */
+  const IDB_STORE = "removedMessages";
+  /** Лимит истории удалённых сообщений (null = без лимита). */
+  const MAX_REMOVED_CACHE = null;
 
   const root = document.querySelector("main") ?? document.body;
 
@@ -159,7 +167,121 @@ function cleanChatDom(keepLast) {
   }
 
   const toRemove = nodes.slice(0, total - keep);
+  const removedHtml = toRemove.map((el) => el.outerHTML);
   for (const el of toRemove) el.remove();
+
+  // Сохраняем удалённые сообщения в IndexedDB (на уровне страницы).
+  /**
+   * Открывает IndexedDB и гарантирует наличие индексов.
+   *
+   * @returns {Promise<IDBDatabase>}
+   */
+  const openDb = () => new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      let store;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        store = db.createObjectStore(IDB_STORE, {
+          keyPath: "id",
+          autoIncrement: true
+        });
+      } else {
+        store = request.transaction.objectStore(IDB_STORE);
+      }
+
+      if (!store.indexNames.contains("conversationKey")) {
+        store.createIndex("conversationKey", "conversationKey", { unique: false });
+      }
+      if (!store.indexNames.contains("conversationKey_createdAt")) {
+        store.createIndex(
+          "conversationKey_createdAt",
+          ["conversationKey", "createdAt"],
+          { unique: false }
+        );
+      }
+      if (!store.indexNames.contains("conversationKey_id")) {
+        store.createIndex(
+          "conversationKey_id",
+          ["conversationKey", "id"],
+          { unique: false }
+        );
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IDB open failed"));
+  });
+
+  /**
+   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
+   *
+   * @param {IDBDatabase} db
+   * @param {string} conversationKey
+   * @returns {Promise<void>}
+   */
+  const pruneConversation = (db, conversationKey) => {
+    if (!Number.isFinite(MAX_REMOVED_CACHE)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const store = tx.objectStore(IDB_STORE);
+    const index = store.index("conversationKey_createdAt");
+    const range = IDBKeyRange.bound(
+      [conversationKey, 0],
+      [conversationKey, Number.MAX_SAFE_INTEGER]
+    );
+    const keys = [];
+
+    index.openCursor(range, "next").onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        keys.push(cursor.primaryKey);
+        cursor.continue();
+        return;
+      }
+
+      const excess = keys.length - MAX_REMOVED_CACHE;
+      if (excess > 0) {
+        for (let i = 0; i < excess; i += 1) {
+          store.delete(keys[i]);
+        }
+      }
+    };
+
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IDB prune failed"));
+  });
+  };
+
+  /**
+   * Добавляет пачку удалённых сообщений в IndexedDB.
+   *
+   * @param {string[]} htmlList
+   * @returns {Promise<void>}
+   */
+  const appendRemovedMessages = async (htmlList) => {
+    if (!htmlList.length) return;
+    const db = await openDb();
+    const conversationKey = `${location.pathname}`;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const now = Date.now();
+      let i = 0;
+      for (const html of htmlList) {
+        store.add({
+          conversationKey,
+          html,
+          createdAt: now + i / 1000
+        });
+        i += 1;
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IDB add failed"));
+    });
+    await pruneConversation(db, conversationKey);
+  };
+
+  void appendRemovedMessages(removedHtml);
 
   return { total, removed: toRemove.length, kept: keep };
 }

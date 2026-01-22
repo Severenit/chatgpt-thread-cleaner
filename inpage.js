@@ -6,7 +6,28 @@
   const BUTTON_TEXT = "Разгрузить чат";
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
+  /** Порог в пикселях для определения "у края". */
+  const SCROLL_EDGE_PX = 12;
+  /** Сколько сообщений восстанавливать за один батч. */
+  const RESTORE_BATCH_SIZE = 8;
+  /** Максимум восстановлений за один заход к верху. */
+  const RESTORE_MAX_PER_EDGE = 500;
+  /** Лимит истории удалённых сообщений (null = без лимита). */
+  const MAX_REMOVED_CACHE = null;
+  /** Имя базы IndexedDB. */
+  const IDB_NAME = "chatgpt-dom-cleaner";
+  /** Версия базы IndexedDB (для миграций схемы). */
+  const IDB_VERSION = 2;
+  /** Название objectStore в IndexedDB. */
+  const IDB_STORE = "removedMessages";
   let keepLast = DEFAULT_KEEP_LAST;
+  let scrollWatcherBound = false;
+  let lastEdge = null;
+  let scrollTicking = false;
+  let scrollTarget = null;
+  let scrollListener = null;
+  let hasUserScrolled = false;
+  let restoreInProgress = false;
 
   /**
    * Возвращает список DOM-узлов сообщений текущего диалога.
@@ -42,7 +63,9 @@
     if (total <= keep) return { total, removed: 0, kept: total };
 
     const toRemove = nodes.slice(0, total - keep);
+    const removedHtml = toRemove.map((el) => el.outerHTML);
     for (const el of toRemove) el.remove();
+    void appendRemovedMessages(removedHtml);
     return { total, removed: toRemove.length, kept: keep };
   }
 
@@ -54,6 +77,9 @@
   function runAndToast() {
     const { total, removed, kept } = cleanChatDom(keepLast);
     toast(`Разгрузка чата: удалено ${removed} из ${total}, оставлено ${kept}`);
+    // После удаления DOM не считаем это пользовательским скроллом.
+    hasUserScrolled = false;
+    lastEdge = null;
   }
 
   /**
@@ -100,6 +126,370 @@
   }
 
   /**
+   * Возвращает корневой скролл-элемент документа.
+   *
+   * @returns {HTMLElement}
+   */
+  function getScrollRoot() {
+    return document.scrollingElement ?? document.documentElement;
+  }
+
+  /**
+   * Уникальный ключ диалога (по pathname).
+   *
+   * @returns {string}
+   */
+  /** Возвращает ключ текущего диалога (по pathname). */
+  const getConversationKey = () => `${location.pathname}`;
+
+  /**
+   * Открывает IndexedDB.
+   *
+   * @returns {Promise<IDBDatabase>}
+   */
+  /**
+   * Открывает IndexedDB и гарантирует наличие индексов.
+   *
+   * @returns {Promise<IDBDatabase>}
+   */
+  const openDb = () => new Promise((resolve, reject) => {
+    const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      let store;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        store = db.createObjectStore(IDB_STORE, {
+          keyPath: "id",
+          autoIncrement: true
+        });
+      } else {
+        store = request.transaction.objectStore(IDB_STORE);
+      }
+
+      if (!store.indexNames.contains("conversationKey")) {
+        store.createIndex("conversationKey", "conversationKey", { unique: false });
+      }
+      if (!store.indexNames.contains("conversationKey_createdAt")) {
+        store.createIndex(
+          "conversationKey_createdAt",
+          ["conversationKey", "createdAt"],
+          { unique: false }
+        );
+      }
+      if (!store.indexNames.contains("conversationKey_id")) {
+        store.createIndex(
+          "conversationKey_id",
+          ["conversationKey", "id"],
+          { unique: false }
+        );
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IDB open failed"));
+  });
+
+  /**
+   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
+   *
+   * @param {IDBDatabase} db
+   * @param {string} conversationKey
+   * @returns {Promise<void>}
+   */
+  /**
+   * Урезает историю по диалогу до MAX_REMOVED_CACHE.
+   *
+   * @param {IDBDatabase} db
+   * @param {string} conversationKey
+   * @returns {Promise<void>}
+   */
+  const pruneConversation = (db, conversationKey) => {
+    if (!Number.isFinite(MAX_REMOVED_CACHE)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const store = tx.objectStore(IDB_STORE);
+    const index = store.index("conversationKey_createdAt");
+    const range = IDBKeyRange.bound(
+      [conversationKey, 0],
+      [conversationKey, Number.MAX_SAFE_INTEGER]
+    );
+    const keys = [];
+
+    index.openCursor(range, "next").onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        keys.push(cursor.primaryKey);
+        cursor.continue();
+        return;
+      }
+
+      const excess = keys.length - MAX_REMOVED_CACHE;
+      if (excess > 0) {
+        for (let i = 0; i < excess; i += 1) {
+          store.delete(keys[i]);
+        }
+      }
+    };
+
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("IDB prune failed"));
+  });
+  };
+
+  /**
+   * Добавляет пачку удалённых сообщений в IndexedDB.
+   *
+   * @param {string[]} htmlList
+   * @returns {Promise<void>}
+   */
+  /**
+   * Добавляет пачку удалённых сообщений в IndexedDB.
+   *
+   * @param {string[]} htmlList
+   * @returns {Promise<void>}
+   */
+  const appendRemovedMessages = async (htmlList) => {
+    if (!htmlList.length) return;
+    const db = await openDb();
+    const conversationKey = getConversationKey();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const now = Date.now();
+      let i = 0;
+      for (const html of htmlList) {
+        store.add({
+          conversationKey,
+          html,
+          createdAt: now + i / 1000
+        });
+        i += 1;
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("IDB add failed"));
+    });
+    await pruneConversation(db, conversationKey);
+  };
+
+  /**
+   * Забирает последние N удалённых сообщений и удаляет их из IndexedDB.
+   *
+   * @param {number} count
+   * @returns {Promise<string[]>}
+   */
+  /**
+   * Забирает последние N удалённых сообщений и удаляет их из IndexedDB.
+   *
+   * @param {number} count
+   * @returns {Promise<string[]>}
+   */
+  const takeRemovedBatch = async (count) => {
+    const db = await openDb();
+    const conversationKey = getConversationKey();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, "readwrite");
+      const store = tx.objectStore(IDB_STORE);
+      const index = store.index("conversationKey_id");
+      const range = IDBKeyRange.bound(
+        [conversationKey, 0],
+        [conversationKey, Number.MAX_SAFE_INTEGER]
+      );
+      const items = [];
+
+      index.openCursor(range, "prev").onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor && items.length < count) {
+          items.push({ id: cursor.primaryKey, html: cursor.value.html });
+          cursor.delete();
+          cursor.continue();
+          return;
+        }
+      };
+
+      tx.oncomplete = () => {
+        const htmlList = items.reverse().map((item) => item.html);
+        resolve(htmlList);
+      };
+      tx.onerror = () => reject(tx.error || new Error("IDB take failed"));
+    });
+  };
+
+  /**
+   * Восстанавливает ранее удалённые сообщения в начало чата.
+   *
+   * @param {number} count
+   * @returns {Promise<number>} Сколько реально восстановили.
+   */
+  /**
+   * Восстанавливает ранее удалённые сообщения в начало чата.
+   *
+   * @param {number} count
+   * @returns {Promise<number>} Сколько реально восстановили.
+   */
+  const restoreMessagesAtTop = async (count) => {
+    if (restoreInProgress) return 0;
+    restoreInProgress = true;
+    try {
+      const htmlList = await takeRemovedBatch(count);
+      if (!htmlList.length) return 0;
+
+      const fragment = document.createDocumentFragment();
+      for (const html of htmlList) {
+        const tpl = document.createElement("template");
+        tpl.innerHTML = html.trim();
+        const node = tpl.content.firstElementChild;
+        if (node) fragment.appendChild(node);
+      }
+
+      const root = document.querySelector("main") ?? document.body;
+      const first = getChatArticles()[0] ?? null;
+      if (first && first.parentNode) {
+        first.parentNode.insertBefore(fragment, first);
+      } else {
+        root.appendChild(fragment);
+      }
+
+      return htmlList.length;
+    } finally {
+      restoreInProgress = false;
+    }
+  };
+
+  /**
+   * Находит наиболее вероятный скролл-контейнер чата.
+   *
+   * @returns {HTMLElement}
+   */
+  /**
+   * Находит наиболее вероятный скролл-контейнер чата.
+   *
+   * @returns {HTMLElement}
+   */
+  function getScrollContainer() {
+    const articles = getChatArticles();
+    const root = document.querySelector("main") ?? document.body;
+    const start = articles.length ? articles[articles.length - 1] : root;
+
+    const isScrollable = (el) => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      const overflowY = style.overflowY || style.overflow;
+      const canScroll = (overflowY === "auto" || overflowY === "scroll") &&
+        el.scrollHeight > el.clientHeight + 1;
+      return canScroll;
+    };
+
+    let node = start?.parentElement ?? null;
+    while (node && node !== document.body && node !== document.documentElement) {
+      if (isScrollable(node)) return node;
+      node = node.parentElement;
+    }
+
+    if (isScrollable(root)) return root;
+    return getScrollRoot();
+  }
+
+  /**
+   * Проверяет, достигнут ли верх/низ страницы, и показывает уведомление.
+   *
+   * @param {HTMLElement} target
+   * @returns {void}
+   */
+  /**
+   * Проверяет достижение верхней/нижней границы и триггерит действия.
+   *
+   * @param {HTMLElement} target
+   * @returns {void}
+   */
+  function checkScrollEdge(target) {
+    const root = target ?? getScrollRoot();
+    const distanceToBottom = root.scrollHeight - root.scrollTop - root.clientHeight;
+    const atTop = root.scrollTop <= SCROLL_EDGE_PX;
+    const atBottom = distanceToBottom <= SCROLL_EDGE_PX;
+
+    if (atTop && lastEdge !== "top") {
+      lastEdge = "top";
+      void (async () => {
+        let totalRestored = 0;
+        while (totalRestored < RESTORE_MAX_PER_EDGE) {
+          const restored = await restoreMessagesAtTop(RESTORE_BATCH_SIZE);
+          if (restored <= 0) break;
+          totalRestored += restored;
+          // если после добавления всё ещё у самого верха — продолжаем
+          const root = scrollTarget ?? getScrollRoot();
+          if (root.scrollTop > SCROLL_EDGE_PX) break;
+        }
+
+        if (totalRestored > 0) {
+          console.log(
+            `[chatgpt-dom-cleaner] Восстановлено ${totalRestored} сообщений.`
+          );
+          toast(`Восстановлено ${totalRestored} сообщений`);
+        } else {
+          console.log("[chatgpt-dom-cleaner] Больше нет сохранённых сообщений.");
+          toast("Больше нет сохранённых сообщений");
+        }
+      })();
+      return;
+    }
+
+    if (atBottom && lastEdge !== "bottom") {
+      lastEdge = "bottom";
+      console.log("[chatgpt-dom-cleaner] Доскроллил до самого низа сообщений.");
+      toast("Доскроллил до самого низа сообщений");
+      return;
+    }
+
+    if (!atTop && !atBottom) {
+      lastEdge = null;
+    }
+  }
+
+  /**
+   * Ставит троттлинг на scroll и показывает состояние верха/низа.
+   *
+   * @returns {void}
+   */
+  /**
+   * Включает наблюдение за скроллом чата (однократно/с ребайндом).
+   *
+   * @returns {void}
+   */
+  function ensureScrollEdgeWatcher() {
+    const nextTarget = getScrollContainer();
+    if (scrollTarget === nextTarget && scrollWatcherBound) return;
+
+    if (scrollListener && scrollTarget) {
+      scrollTarget.removeEventListener("scroll", scrollListener);
+    }
+
+    scrollTarget = nextTarget;
+
+    const onScroll = () => {
+      if (!hasUserScrolled) return;
+      if (scrollTicking) return;
+      scrollTicking = true;
+      requestAnimationFrame(() => {
+        scrollTicking = false;
+        checkScrollEdge(scrollTarget);
+      });
+    };
+
+    scrollListener = onScroll;
+    scrollTarget.addEventListener("scroll", onScroll, { passive: true });
+
+    if (!scrollWatcherBound) {
+      const markUserScroll = () => {
+        hasUserScrolled = true;
+      };
+      window.addEventListener("wheel", markUserScroll, { passive: true });
+      window.addEventListener("touchmove", markUserScroll, { passive: true });
+      window.addEventListener("keydown", markUserScroll, { passive: true });
+    }
+
+    scrollWatcherBound = true;
+  }
+
+  /**
    * Встраивает кнопку “Разгрузить чат” в хедер ChatGPT (рядом с “Поделиться”),
    * либо обновляет видимость уже существующей.
    *
@@ -111,6 +501,7 @@
       document.querySelector('main [role="banner"]') ??
       null;
     if (!header) return;
+    if (!canMountIntoHeader(header)) return;
 
     const existing = header.querySelector(`[${BTN_ATTR}="1"]`);
     if (existing) {
@@ -143,6 +534,20 @@
 
     updateHeaderButtonVisibility(btn);
     updateHeaderButtonLabel(btn);
+  }
+
+  /**
+   * Проверяет, безопасно ли встраивать кнопку в header
+   * (не лезем в SSR/гидратацию React).
+   *
+   * @param {HTMLElement} header
+   * @returns {boolean}
+   */
+  function canMountIntoHeader(header) {
+    if (document.readyState !== "complete") return false;
+    // Ждём, когда в хедере появятся реальные элементы управления.
+    if (!header.querySelector("button")) return false;
+    return true;
   }
 
   /**
@@ -261,6 +666,7 @@
    */
   function boot() {
     ensureHeaderButton();
+    ensureScrollEdgeWatcher();
   }
 
   /**
