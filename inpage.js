@@ -6,6 +6,9 @@
   const ICON_HREF = "/cdn/assets/sprites-core-k5zux585.svg#a5ec30";
   const TOAST_MS = 4500;
   const TOAST_ID = "chatgpt-dom-cleaner-toast";
+  const PINNED_SECTION_ATTR = "data-chatgpt-dom-cleaner-pinned-section";
+  const PINNED_HEADER_TEXT = "Сохраненные чаты";
+  const PINNED_ITEM_TEXT = "пример сохраненного чата";
   /** Threshold (px) to consider the user "at an edge". */
   const SCROLL_EDGE_PX = 12;
   /** How many messages to restore per batch. */
@@ -582,6 +585,45 @@
     updateHeaderButtonLabel(btn);
   }
 
+  const ensurePinnedChatsSection = () => {
+    const candidates = Array.from(
+      document.querySelectorAll('[class*="sidebar-expando-section"]')
+    );
+    const section = candidates.find((el) => {
+      const cls = String(el.className || "");
+      return cls.includes("sidebar-expando-section") &&
+        cls.includes("sidebar-expanded-section-margin-bottom");
+    }) || null;
+    if (!section) return;
+
+    let pinned = section.querySelector(`[${PINNED_SECTION_ATTR}="1"]`);
+    if (!pinned) {
+      pinned = document.createElement("details");
+      pinned.setAttribute(PINNED_SECTION_ATTR, "1");
+      pinned.style.padding = "6px 8px";
+      pinned.style.fontSize = "12px";
+      pinned.style.opacity = "0.8";
+
+      const summary = document.createElement("summary");
+      summary.textContent = PINNED_HEADER_TEXT;
+      summary.className = "__menu-label";
+      summary.style.cursor = "pointer";
+      summary.style.listStyle = "none";
+      summary.style.padding = "2px 0 6px";
+      pinned.appendChild(summary);
+
+      const list = document.createElement("ul");
+      list.style.margin = "0";
+      list.style.padding = "0 0 0 16px";
+      const item = document.createElement("li");
+      item.textContent = PINNED_ITEM_TEXT;
+      list.appendChild(item);
+      pinned.appendChild(list);
+
+      section.appendChild(pinned);
+    }
+  };
+
   /**
    * Checks whether it's safe to mount into the header
    * (avoid interfering with React SSR/hydration).
@@ -743,6 +785,7 @@
   function boot() {
     ensureHeaderButton();
     ensureScrollEdgeWatcher();
+    ensurePinnedChatsSection();
   }
 
   /**
