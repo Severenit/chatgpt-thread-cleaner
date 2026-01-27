@@ -5,8 +5,16 @@
   "version": "0.1.1",
   "manifest_version": 3,
   "default_locale": "en",
-  "permissions": ["activeTab", "scripting", "contextMenus", "storage"],
-  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "contextMenus",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -28,8 +36,24 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["inpage.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "proxy.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "inpage.js"
+      ],
       "run_at": "document_idle"
     }
   ]
