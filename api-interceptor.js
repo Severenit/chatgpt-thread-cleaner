@@ -5,11 +5,11 @@
  */
 (() => {
 
-  window.isLogging = true;
+  window.isLogging =  false;
 
   // Переключает логирование
   window.loggingOff = () => {
-    window.isLogging = !window.isLogging;
+    window.isLogging = false;
   };
 
   window.loggingOn = () => {
