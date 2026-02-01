@@ -123,6 +123,7 @@
    */
   function getChatArticles() {
     const root = document.querySelector("main") ?? document.body;
+    if (!root) return [];
     const primary = Array.from(
       root.querySelectorAll('article[data-testid^="conversation-turn"]')
     );
@@ -214,7 +215,7 @@
    * @returns {HTMLElement}
    */
   function getScrollRoot() {
-    return document.scrollingElement ?? document.documentElement;
+    return document.scrollingElement ?? document.documentElement ?? document.body;
   }
 
   /**
@@ -414,6 +415,8 @@
   function getScrollContainer() {
     const articles = getChatArticles();
     const root = document.querySelector("main") ?? document.body;
+    if (!root) return getScrollRoot();
+
     const start = articles.length ? articles[articles.length - 1] : root;
 
     const isScrollable = (el) => {
@@ -506,6 +509,7 @@
     }
 
     scrollTarget = nextTarget;
+    if (!scrollTarget) return;
 
     const onScroll = () => {
       if (!hasUserScrolled) return;
@@ -736,6 +740,41 @@
     return btn;
   }
 
+  const DROPDOWN_WRAPPER_SELECTOR =
+    '[data-rad1x-popper-content-wrapper], [data-radix-popper-content-wrapper]';
+
+  /**
+   * Subscribes to clicks inside the sidebar context menu (popper dropdown).
+   * Dropdown is added to DOM only when opened, so we use MutationObserver to
+   * attach a capture-phase listener to the wrapper as soon as it appears —
+   * then we catch the click even if the library stops propagation.
+   */
+  function bindDropdownClickLogger() {
+    if (document.__chatgptCleanerDropdownLoggerBound) return;
+    document.__chatgptCleanerDropdownLoggerBound = true;
+
+    const seenWrappers = new WeakSet();
+    const attachToWrappers = (root) => {
+      const list = root.matches?.(DROPDOWN_WRAPPER_SELECTOR)
+        ? [root]
+        : Array.from(root.querySelectorAll?.(DROPDOWN_WRAPPER_SELECTOR) ?? []);
+      for (const wrapper of list) {
+        if (seenWrappers.has(wrapper)) continue;
+        seenWrappers.add(wrapper);
+        wrapper.addEventListener('click', logDropdownClick, true);
+      }
+    };
+    const observer = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          attachToWrappers(node);
+        }
+      }
+    });
+    observer.observe(document.documentElement, { subtree: true, childList: true });
+  }
+
   /**
    * Single refresh entry point for UI injection:
    * - header button near "Share"
@@ -743,6 +782,7 @@
   function boot() {
     ensureHeaderButton();
     ensureScrollEdgeWatcher();
+    bindDropdownClickLogger();
   }
 
   /**
@@ -790,6 +830,13 @@
 
   // Initial boot + observer (React frequently re-renders header/menus).
   void (async () => {
+    // Wait for DOM to be ready
+    if (document.readyState === 'loading') {
+      await new Promise(resolve => {
+        document.addEventListener('DOMContentLoaded', resolve, { once: true });
+      });
+    }
+
     await syncLangOverrideFromStorage();
     await syncKeepLastFromStorage();
     boot();
