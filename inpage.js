@@ -761,7 +761,6 @@
       for (const wrapper of list) {
         if (seenWrappers.has(wrapper)) continue;
         seenWrappers.add(wrapper);
-        wrapper.addEventListener('click', logDropdownClick, true);
       }
     };
     const observer = new MutationObserver((mutations) => {
