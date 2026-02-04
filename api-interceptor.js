@@ -263,6 +263,40 @@
     }
   };
 
+  const PIN_LOADER_ID = 'chatgpt-thread-cleaner-pin-loader';
+
+  const showPinLoader = () => {
+    if (document.getElementById(PIN_LOADER_ID)) return;
+    const overlay = document.createElement('div');
+    overlay.id = PIN_LOADER_ID;
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.style.cssText = [
+      'position:fixed;inset:0;z-index:2147483647;',
+      'display:flex;align-items:center;justify-content:center;',
+      'background:rgba(0,0,0,0.35);backdrop-filter:blur(2px);',
+      'animation:chatgpt-tc-loader-fade 0.15s ease-out'
+    ].join('');
+    const spinner = document.createElement('div');
+    spinner.style.cssText = [
+      'width:40px;height:40px;border:3px solid rgba(255,255,255,0.25);',
+      'border-top-color:#10a37f;border-radius:50%;',
+      'animation:chatgpt-tc-loader-spin 0.7s linear infinite'
+    ].join('');
+    const style = document.createElement('style');
+    style.textContent = [
+      '@keyframes chatgpt-tc-loader-spin{to{transform:rotate(360deg)}}',
+      '@keyframes chatgpt-tc-loader-fade{from{opacity:0}to{opacity:1}}'
+    ].join('');
+    document.head.appendChild(style);
+    overlay.appendChild(spinner);
+    document.body.appendChild(overlay);
+  };
+
+  const hidePinLoader = () => {
+    const el = document.getElementById(PIN_LOADER_ID);
+    if (el) el.remove();
+  };
+
   const logToConsole = (method, url, requestData, responseData, headers, status) => {
     if(!window.isLogging){
       return;
@@ -366,7 +400,6 @@
     let body = config?.body;
     if (resource instanceof Request && !body) {
       try {
-        // Клонируем Request чтобы прочитать body без его "использования"
         const clonedRequest = resource.clone();
         body = await clonedRequest.text();
       } catch (e) {
@@ -374,35 +407,51 @@
       }
     }
 
-    // Обрабатываем is_starred: сохраняем в нашу БД и пропускаем запрос к серверу,
-    // чтобы приложение получило настоящий ответ и само перезапросило /pins (UI обновится).
-    const starResult = await handleStarRequest(url, method, body);
+    const isStarRequest =
+      method === 'PATCH' &&
+      /\/backend-api\/conversation\/[a-f0-9-]+/.test(url || '') &&
+      (() => {
+        try {
+          const p = typeof body === 'string' ? JSON.parse(body) : body;
+          return p && 'is_starred' in p;
+        } catch {
+          return false;
+        }
+      })();
+
+    if (isStarRequest) showPinLoader();
+
     let response;
+    try {
+      // Обрабатываем is_starred: сохраняем в БД и пропускаем запрос к серверу,
+      // чтобы приложение получило ответ и само перезапросило /pins (UI обновится).
+      const starResult = await handleStarRequest(url, method, body);
 
-    if (starResult) {
-      response = await originalFetch.apply(this, args);
+      if (starResult) {
+        response = await originalFetch.apply(this, args);
 
-      if (response.ok) {
-        // Сервер вернул 200 — приложение само перезапросит /pins и получит наш дополненный ответ
-        // response пойдёт в блок ниже, где перехватывается GET /pins (это другой запрос)
-      } else {
-        // Сервер вернул ошибку (например 404) — подменяем на 200 и триггерим обновление UI
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('chatgpt-starred-changed', {
-            detail: { threadId: starResult.threadId, isStarred: starResult.isStarred }
-          }));
-          forceReactUpdate();
-        }, 0);
-        return new Response(JSON.stringify({ success: true }), {
-          status: 200,
-          statusText: 'OK',
-          headers: { 'Content-Type': 'application/json' }
-        });
+        if (response.ok) {
+          // Сервер вернул 200 — приложение само перезапросит /pins
+        } else {
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('chatgpt-starred-changed', {
+              detail: { threadId: starResult.threadId, isStarred: starResult.isStarred }
+            }));
+            forceReactUpdate();
+          }, 0);
+          return new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            statusText: 'OK',
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
       }
-    }
 
-    if (!response) {
-      response = await originalFetch.apply(this, args);
+      if (!response) {
+        response = await originalFetch.apply(this, args);
+      }
+    } finally {
+      if (isStarRequest) hidePinLoader();
     }
 
     // Перехватываем GET /pins - дополняем ответ сервера нашими starred тредами
@@ -539,29 +588,22 @@
                           })();
 
     if (isStarRequest) {
-
-      // Асинхронно обрабатываем starred запрос и ЖДЕМ завершения
+      showPinLoader();
       (async () => {
-        await handleStarRequest(xhr._interceptorUrl, xhr._interceptorMethod, body);
-
-        // Имитируем успешный ответ ПОСЛЕ сохранения
-        Object.defineProperty(xhr, 'readyState', { writable: true, value: 4 });
-        Object.defineProperty(xhr, 'status', { writable: true, value: 200 });
-        Object.defineProperty(xhr, 'statusText', { writable: true, value: 'OK' });
-        Object.defineProperty(xhr, 'responseText', { writable: true, value: JSON.stringify({ success: true }) });
-        Object.defineProperty(xhr, 'response', { writable: true, value: JSON.stringify({ success: true }) });
-
-
-        // Принудительно обновляем React UI
-        setTimeout(() => {
-          forceReactUpdate();
-        }, 0);
-
-        // Вызываем событие load
-        xhr.dispatchEvent(new Event('load'));
-        xhr.dispatchEvent(new Event('loadend'));
+        try {
+          await handleStarRequest(xhr._interceptorUrl, xhr._interceptorMethod, body);
+          Object.defineProperty(xhr, 'readyState', { writable: true, value: 4 });
+          Object.defineProperty(xhr, 'status', { writable: true, value: 200 });
+          Object.defineProperty(xhr, 'statusText', { writable: true, value: 'OK' });
+          Object.defineProperty(xhr, 'responseText', { writable: true, value: JSON.stringify({ success: true }) });
+          Object.defineProperty(xhr, 'response', { writable: true, value: JSON.stringify({ success: true }) });
+          setTimeout(() => forceReactUpdate(), 0);
+          xhr.dispatchEvent(new Event('load'));
+          xhr.dispatchEvent(new Event('loadend'));
+        } finally {
+          hidePinLoader();
+        }
       })();
-
       return;
     }
 
